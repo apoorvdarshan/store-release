@@ -1,0 +1,82 @@
+# Fuzzing with Atheris (libFuzzer for Python): the config loader, the release notes
+# reader, the PNG integrity and alpha checks with screenshot staging, the release
+# switches and gate resolution, and the credential-ID log redaction (fuzz/fuzz_*.py).
+# Advisory, not a required check: a pull request or push runs each target for 60
+# seconds, the weekly run for 10 minutes, a manual run for the seconds it is given.
+# A newer push to a pull request cancels its older run; main, scheduled and manual
+# runs never are. A failing input is uploaded as the job's artifact; reproduce it with
+#   python3 -I fuzz/fuzz_<target>.py <crash file>
+name: Fuzz
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    # Weekly on Mondays.
+    - cron: "47 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: Seconds per target (1-3600)
+        required: false
+        default: "300"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  fuzz:
+    name: fuzz (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [config, release_notes, png, switches, redact]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install Atheris and the store lock (hash-pinned)
+        run: |
+          set -euo pipefail
+          python3 -m pip install --disable-pip-version-check --require-hashes \
+            -r fuzz/requirements.txt -r requirements.txt
+          python3 -m pip check
+      - name: Fuzz ${{ matrix.target }}
+        env:
+          TARGET: ${{ matrix.target }}
+          FUZZ_SECONDS: ${{ github.event_name == 'schedule' && '600' || inputs.seconds || '60' }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$FUZZ_SECONDS" =~ ^[0-9]+$ ]] || (( FUZZ_SECONDS < 1 || FUZZ_SECONDS > 3600 )); then
+            echo "error: seconds must be a whole number from 1 to 3600, got '$FUZZ_SECONDS'" >&2
+            exit 1
+          fi
+          corpus="$RUNNER_TEMP/corpus/$TARGET"
+          mkdir -p "$RUNNER_TEMP/crashes"
+          python3 -I fuzz/seeds.py "$TARGET" "$corpus"
+          python3 -I "fuzz/fuzz_$TARGET.py" -max_total_time="$FUZZ_SECONDS" -timeout=25 -rss_limit_mb=2048 \
+            -print_final_stats=1 -artifact_prefix="$RUNNER_TEMP/crashes/" "$corpus"
+      - name: Keep the failing input
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-${{ matrix.target }}-crash
+          path: ${{ runner.temp }}/crashes/
+          if-no-files-found: ignore
+          retention-days: 14

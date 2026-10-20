@@ -20,7 +20,8 @@ updates:
     commit-message:
       prefix: "CI"
   - package-ecosystem: pip
-    directory: /
+    # / holds the store, checks and lint locks; /fuzz the Atheris lock.
+    directories: ["/", "/fuzz"]
     schedule:
       interval: weekly
       day: monday
