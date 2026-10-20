@@ -27,8 +27,8 @@ RESULT = r"(success|failure|cancelled|skipped)"
 GATES = re.compile(rf"[a-z0-9][a-z0-9_-]*={RESULT}( [a-z0-9][a-z0-9_-]*={RESULT})*")
 # The jobs that start a run and so have no earlier tool_sha to compare with.
 FIRST_JOBS = {"ios-prepare", "android-gates", "checks"}
-STAGES = ("ios-build", "ios-wait-for-build", "ios-app-store-connect", "ios-github-release", "ios-store-plan",
-          "android-publish", "android-store-plan")
+STAGES = ("ios-build", "ios-wait-for-build", "ios-app-store-connect", "ios-github-release", "ios-source-archive",
+          "ios-store-plan", "android-publish", "android-store-plan")
 
 
 class StageError(Exception):
@@ -71,6 +71,9 @@ SAFE_PATH = re.compile(r"[A-Za-z0-9._/+@ -]+")
 APP_NAME = re.compile(r"[^\n\r\x00]{1,64}")
 TASKS = re.compile(r":?[A-Za-z0-9_.:-]+( :?[A-Za-z0-9_.:-]+)*")
 BOOLEAN = re.compile(r"true|false")
+FLOW = re.compile(r"[a-z][a-z-]*")
+WORD = re.compile(r"[A-Za-z0-9_.-]+")
+SDK_PACKAGES = re.compile(r"([A-Za-z0-9_.;-]+( [A-Za-z0-9_.;-]+)*)?")
 
 
 def export_values(config: Config, job: str, config_path: str = config_mod.DEFAULT_CONFIG
@@ -91,6 +94,8 @@ def export_values(config: Config, job: str, config_path: str = config_mod.DEFAUL
         values += [
             ("STORE_RELEASE_HAS_IOS", "true" if config.ios is not None else "false", BOOLEAN),
             ("STORE_RELEASE_HAS_ANDROID", "true" if config.android is not None else "false", BOOLEAN),
+            ("STORE_RELEASE_PORTED_FLOW", "true" if config.ported_flow else "false", BOOLEAN),
+            ("STORE_RELEASE_UNIQUE_HEADINGS", "true" if config.unique_headings else "false", BOOLEAN),
         ]
     if want_ios and config.ios is not None:
         ios = config.ios
@@ -101,6 +106,9 @@ def export_values(config: Config, job: str, config_path: str = config_mod.DEFAUL
             ("STORE_RELEASE_IOS_PROJECT", ios.project, SAFE_PATH),
             ("STORE_RELEASE_IOS_SCHEME", ios.scheme, config_mod.SCHEME),
             ("STORE_RELEASE_IOS_LOCALE", ios.locale, config_mod.LOCALE),
+            ("STORE_RELEASE_IOS_FLOW", ios.flow, FLOW),
+            ("STORE_RELEASE_IOS_VERIFY_IPA", "true" if ios.build.verify_ipa else "false", BOOLEAN),
+            ("STORE_RELEASE_IOS_SOURCE_ARCHIVE", "true" if ios.source_archive else "false", BOOLEAN),
         ]
     if want_android and config.android is not None:
         android = config.android
@@ -114,7 +122,16 @@ def export_values(config: Config, job: str, config_path: str = config_mod.DEFAUL
             ("STORE_RELEASE_ANDROID_APK", android.build.apk, SAFE_PATH),
             ("STORE_RELEASE_ANDROID_KEYSTORE_PROPERTIES", android.build.keystore_properties, SAFE_PATH),
             ("STORE_RELEASE_ANDROID_GRADLE_FILE", android.gradle_file, SAFE_PATH),
+            ("STORE_RELEASE_ANDROID_FLOW", android.flow, FLOW),
+            ("STORE_RELEASE_ANDROID_SIGNING", android.build.signing, WORD),
+            ("STORE_RELEASE_ANDROID_SDK_PACKAGES", " ".join(android.build.sdk_packages), SDK_PACKAGES),
         ]
+        if android.build.signing == "gradle-properties":
+            values += [
+                ("STORE_RELEASE_ANDROID_KEYSTORE_PROPERTY", android.build.keystore_property, WORD),
+                ("STORE_RELEASE_ANDROID_PASSWORD_FILE_PROPERTY", android.build.password_file_property, WORD),
+                ("STORE_RELEASE_ANDROID_KEY_ALIAS", android.build.key_alias, WORD),
+            ]
     return values
 
 
@@ -123,7 +140,7 @@ def config_export(config: Config, job: str, *, environ: Mapping[str, str] | None
     env = os.environ if environ is None else environ
     lines = []
     for name, value, pattern in export_values(config, job, config_path):
-        if "\n" in value or "\r" in value or not pattern.fullmatch(value):
+        if "\n" in value or "\r" in value or not pattern.fullmatch(value) or (value == "" and pattern is not SDK_PACKAGES):
             raise StageError(f"{name}: {value!r} is not safe to export")
         lines.append(f"{name}={value}")
     target = env.get("GITHUB_ENV")
@@ -175,13 +192,23 @@ def parse_gates(raw: str) -> dict[str, str]:
     return results
 
 
-def gate_check(raw: str, configured: list[str], *, release: bool) -> dict[str, str]:
-    """The gate jobs' results this stage may run after (the caller's `if:`, checked again)."""
+def gate_check(raw: str, configured: list[str], *, release: bool, skipped_ok: bool = False) -> dict[str, str]:
+    """The gate jobs' results this stage may run after (the caller's `if:`, checked again).
+
+    skipped_ok: ios.gate_policy = "when-uploading", on a tag run that uploads no build: the
+    gate jobs did not run (PCM Notes' caller), so all of them must be skipped.
+    """
     results = parse_gates(raw)
     if sorted(results) != sorted(configured) or len(results) != len(configured):
         raise StageError(f"--gates names {', '.join(results) or 'nothing'}, but the config's gate jobs are "
                          f"{', '.join(configured)}")
     values = set(results.values())
+    if skipped_ok:
+        if values == {"skipped"}:
+            return results
+        table = "\n  ".join(f"{name}: {result}" for name, result in results.items())
+        raise StageError(f"with ios.gate_policy = when-uploading, a run that uploads no build never runs the gate "
+                         f"jobs; got:\n  {table}")
     if release and values == {"success"}:
         return results
     if not release and values in ({"success"}, {"skipped"}):
@@ -248,7 +275,15 @@ def stage_check(stage: str, args: argparse.Namespace, config: Config, *,
     print(f"{stage}: inputs checked")
 
 
-def _project_version() -> str:
+def _project_version(config: Config | None = None) -> str:
+    if config is not None and config.ios is not None and config.ios.flow != "fud-ai":
+        from store_release.flows import commands  # noqa: PLC0415
+
+        release = commands.module(config.ios.flow, "ios_release")
+        try:
+            return commands.project_value(config.ios.flow, "MARKETING_VERSION")
+        except release.ReleaseError as exc:
+            raise StageError(str(exc)) from None
     from store_release.ios import release as ios_release  # noqa: PLC0415
 
     try:
@@ -268,12 +303,12 @@ def _ios_stage(stage: str, args: argparse.Namespace, config: Config, env: Mappin
         version = matches(VERSION, "marketing-version", args.marketing_version)
         if mode == "release":
             require_tag(env, prefix, version)
-            project = _project_version()
+            project = _project_version(config)
             if version != project:
                 raise StageError(f"--marketing-version {version} is not the project's MARKETING_VERSION {project}")
         else:
             wanted = args.dispatch_version.strip() if args.dispatch_version else ""
-            expected = wanted or _project_version()
+            expected = wanted or _project_version(config)
             if version != expected:
                 raise StageError(f"--marketing-version {version} is not the version this dispatch validates ({expected})")
         matches(DIGITS, "build-number", args.build_number)
@@ -305,19 +340,30 @@ def _ios_stage(stage: str, args: argparse.Namespace, config: Config, env: Mappin
             matches(DIGITS, "build-number", args.build_number)
         elif args.build_id:
             raise StageError(f"--build-id {args.build_id!r} given, but this run uploads no build")
-        gate_check(args.gates, gate_ids, release=True)
+        gate_check(args.gates, gate_ids, release=True,
+                   skipped_ok=ios.gate_policy == "when-uploading" and not flags["upload-build"])
+    elif stage == "ios-source-archive":
+        if not ios.source_archive:
+            raise StageError("ios-source-archive runs only with ios.github_release.source_archive = true")
+        require_push(env, stage)
+        version = matches(VERSION, "marketing-version", args.marketing_version)
+        require_tag(env, prefix, version)
+        matches(DIGITS, "uploaded-build", args.uploaded_build, allow_empty=True)
+        gate_check(args.gates, gate_ids, release=True,
+                   skipped_ok=ios.gate_policy == "when-uploading" and args.uploaded_build == "")
     elif stage == "ios-github-release":
         require_push(env, stage)
         version = matches(VERSION, "marketing-version", args.marketing_version)
         require_tag(env, prefix, version)
         matches(DIGITS, "uploaded-build", args.uploaded_build, allow_empty=True)
-        gate_check(args.gates, gate_ids, release=True)
+        gate_check(args.gates, gate_ids, release=True,
+                   skipped_ok=ios.gate_policy == "when-uploading" and args.uploaded_build == "")
     elif stage == "ios-store-plan":
         if event_mode(env) != "validate":
             raise StageError("store-plan runs only on a manual validation dispatch")
         version = matches(VERSION, "marketing-version", args.marketing_version)
         wanted = args.dispatch_version.strip() if args.dispatch_version else ""
-        expected = wanted or _project_version()
+        expected = wanted or _project_version(config)
         if version != expected:
             raise StageError(f"--marketing-version {version} is not the version this dispatch validates ({expected})")
     else:

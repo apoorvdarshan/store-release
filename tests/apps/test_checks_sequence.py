@@ -28,7 +28,14 @@ NOT_RUN_HERE = {
     "Check the callers and their pins",
     "Refuse a yanked store-release version",
 }
-CONDITION = re.compile(r"env\.(STORE_RELEASE_HAS_IOS|STORE_RELEASE_HAS_ANDROID) == 'true'")
+# A step runs when every `env.X == 'true'` / `env.X != 'true'` term of its condition holds.
+TERM = re.compile(r"env\.(STORE_RELEASE_[A-Z_]+) (==|!=) 'true'")
+CONDITION = re.compile(rf"{TERM.pattern}( && {TERM.pattern})*")
+
+
+# The steps only a ported flow runs (ios.flow / android.flow other than fud-ai).
+PORTED_ONLY = ["Validate the IAP catalog (ported flow)",
+               "Check the committed store files (ported flow, dry-run, no store APIs)"]
 
 
 def ios_only(text: str) -> str:
@@ -69,8 +76,9 @@ class ChecksSequenceTests(unittest.TestCase):
                 condition = step.get("if")
                 if condition is not None:
                     match = CONDITION.fullmatch(condition)
-                    self.assertIsNotNone(match, f"{name}: this test only knows the platform conditions, not {condition!r}")
-                    if exported.get(match.group(1)) != "true":
+                    self.assertIsNotNone(match, f"{name}: this test only knows the config conditions, not {condition!r}")
+                    holds = all((exported.get(var) == "true") == (op == "==") for var, op in TERM.findall(condition))
+                    if not holds:
                         skipped.append(name)
                         continue
                 env = {**base, **exported}
@@ -86,7 +94,7 @@ class ChecksSequenceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = trees.write_fud_ai_tree(Path(tmp) / "fud-ai", screenshots=True)
             ran, skipped = self.run_sequence(root)
-        self.assertEqual(skipped, [])
+        self.assertEqual(skipped, PORTED_ONLY)
         self.assertIn("Validate the Play publisher step (dry-run, no network)", ran)
         self.assertIn("Check the project version and export compliance", ran)
 
@@ -95,11 +103,43 @@ class ChecksSequenceTests(unittest.TestCase):
             text = ios_only((TOOL_ROOT / "examples" / "example" / "store-release.toml").read_text())
             root = trees.write_example_tree(Path(tmp) / "ios-only", config=text)
             ran, skipped = self.run_sequence(root)
-        self.assertEqual(skipped, ["Validate the Play publisher step (dry-run, no network)", "Check the gradle version"])
+        self.assertEqual(skipped, [PORTED_ONLY[0], "Validate the Play publisher step (dry-run, no network)",
+                                   "Check the gradle version", PORTED_ONLY[1]])
         for name in ("Check every file the config names", "Validate the ASC store steps (dry-run, no network)",
                      "Check the project version and export compliance",
                      "Stage every screenshot set for upload (Pillow, no store APIs)"):
             self.assertIn(name, ran)
+
+
+class PortedFlowStepsTests(unittest.TestCase):
+    """For a ported flow's config, checks.yml runs the flow's own checks and skips the fud-ai flow's."""
+
+    def test_each_ported_app_runs_its_flows_steps(self) -> None:
+        steps = yaml.safe_load(CHECKS.read_text())["jobs"]["checks"]["steps"]
+        sys.path.insert(0, str(TOOL_ROOT / "tests"))
+        from flows import trees as flow_trees  # noqa: PLC0415
+        from store_release import config, stage  # noqa: PLC0415
+
+        for app in ("scowld", "verceltics", "abysm", "pcm-notes", "quit-all"):
+            with self.subTest(app=app), tempfile.TemporaryDirectory() as tmp:
+                cfg = config.load_for_app(flow_trees.build_tree(app, Path(tmp)))
+                exported = {name: value for name, value, _ in stage.export_values(cfg, "checks")}
+                ran = []
+                for step in steps:
+                    condition = step.get("if")
+                    if condition is None:
+                        ran.append(step.get("name", step.get("uses")))
+                        continue
+                    self.assertIsNotNone(CONDITION.fullmatch(condition), condition)
+                    if all((exported.get(var) == "true") == (op == "==") for var, op in TERM.findall(condition)):
+                        ran.append(step.get("name", step.get("uses")))
+                for name in PORTED_ONLY:
+                    self.assertIn(name, ran)
+                for name in ("Validate IAP / subscription / tip catalog", "Prepare What's New (dry-run)",
+                             "Validate the ASC store steps (dry-run, no network)", "RevenueCat catalog dry-run",
+                             "Stage every screenshot set for upload (Pillow, no store APIs)"):
+                    self.assertNotIn(name, ran)
+                self.assertEqual("Check release notes headings" in ran, cfg.unique_headings)
 
 
 if __name__ == "__main__":

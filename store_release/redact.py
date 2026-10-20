@@ -3,9 +3,10 @@
 
 xcodebuild, altool and Xcode's distribution logs echo the API key ID and issuer
 ID. Workflow artifacts are not masked like the console, and app repositories are
-public, so every file is rewritten byte for byte (text and binary alike) and any
+public, so every file is rewritten byte for byte (text and binary alike), any
 file that still contains an ID afterwards, in any case or as UTF-16 text, is
-deleted rather than uploaded.
+deleted rather than uploaded, and a file or folder whose name holds an ID is
+renamed (the union of every app's former redactor).
 
     ios redact-logs DIR     IDs come from ASC_KEY_ID and ASC_ISSUER_ID
 
@@ -68,7 +69,39 @@ def redact_folder(folder: Path, secrets: dict[str, str]) -> tuple[int, list[Path
             # UTF-16 or otherwise encoded copies cannot be rewritten safely.
             path.unlink()
             removed.append(path)
+    rename_ids(folder, secrets)
     return changed, removed
+
+
+def redacted_name(name: str, secrets: dict[str, str]) -> str:
+    """A file or folder name with every ID (any case) replaced by its placeholder's name."""
+    for key, value in secrets.items():
+        if value:
+            name = replace_ignoring_case(name.encode("utf-8"), value.encode("utf-8"),
+                                         PLACEHOLDERS[key].strip(b"<>")).decode("utf-8", "replace")
+    return name
+
+
+def rename_ids(folder: Path, secrets: dict[str, str]) -> list[Path]:
+    """Rename files and folders whose name holds an ID (deepest first); an artifact's paths are
+    as public as its contents. A name that cannot be renamed (the target exists) is removed."""
+    renamed: list[Path] = []
+    for path in sorted(folder.rglob("*"), key=lambda p: len(p.parts), reverse=True):
+        clean = redacted_name(path.name, secrets)
+        if clean == path.name:
+            continue
+        target = path.with_name(clean)
+        if target.exists():
+            if path.is_dir() and not path.is_symlink():
+                import shutil  # noqa: PLC0415
+
+                shutil.rmtree(path)
+            else:
+                path.unlink()
+            continue
+        path.rename(target)
+        renamed.append(target)
+    return renamed
 
 
 def main(argv: list[str]) -> int:

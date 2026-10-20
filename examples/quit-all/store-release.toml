@@ -1,0 +1,78 @@
+# Quit All's store-release configuration. Schema:
+# https://github.com/apoorvdarshan/store-release/blob/v0.2.0/docs/config.md
+# Switches stay in repository variables and secrets in repository secrets.
+schema = 1
+
+[app]
+name = "Quit All"
+slug = "quitall"
+
+[release_notes]
+path = "RELEASE_NOTES.md"
+
+[catalog]
+path = "store/catalog/products.json"
+groups = ["subscriptions", "non_consumables", "consumables", "tips"]
+id_prefix = "com.quitall."
+storekit = "ios/Quit All/Products.storekit"
+products_source = "ios/Quit All/Core/PaywallManager.swift"
+
+[checks]
+paths = [
+  "store/**",
+  "RELEASE_NOTES.md",
+  "ios/Quit All.xcodeproj/project.pbxproj",
+  "ios/Quit All/Core/PaywallManager.swift",
+  "ios/Quit All/Products.storekit",
+  ".github/workflows/ios-release.yml",
+  ".github/workflows/store-checks.yml",
+]
+
+[ios]
+# Quit All's own release scripts (scripts/store at 34b8198), ported unchanged.
+flow = "quit-all"
+tag_prefix = "v"
+bundle_id = "com.apoorvdarshan.Quit-All"
+asc_app_id = "6760978934"
+team_id = "23RV7FYH36"
+project = "ios/Quit All.xcodeproj"
+scheme = "Quit All"
+app_target = "Quit All"
+locale = "en-US"
+gate_jobs = [
+  { id = "tests", uses = "./.github/workflows/ios-tests.yml" },
+]
+# The iOS tests run on every tag push, after prepare.
+gate_policy = "after-prepare"
+
+[ios.build]
+developer_dir = "/Applications/Xcode_27.app/Contents/Developer"
+checkout = ["/ios/", "!/ios/screenshots/"]
+package_cache_files = ["ios/**/Package.resolved"]
+# The widget reads the app's progress through the shared app group (verify_ios_bundles.sh).
+extensions = ["com.apoorvdarshan.Quit-All.Widget"]
+verify_ipa = true
+
+[ios.build.app_groups]
+"com.apoorvdarshan.Quit-All" = ["group.com.apoorvdarshan.quitall"]
+"com.apoorvdarshan.Quit-All.Widget" = ["group.com.apoorvdarshan.quitall"]
+
+[ios.listing]
+source = "files"
+dir = "store/metadata/ios"
+
+[ios.whats_new]
+source = "files"
+# store/metadata/ios/whats_new_version.txt names the version the What's New text is for.
+version_file = "whats_new_version.txt"
+
+[ios.screenshots]
+manifest = "screenshots.json"
+
+[ios.creative]
+dir = "store/creative/ios"
+
+[ios.github_release]
+title = "Quit All {tag} (build {build})"
+on_existing = "fail"
+latest = "always"

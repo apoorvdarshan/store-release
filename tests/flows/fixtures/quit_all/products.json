@@ -1,0 +1,31 @@
+{
+  "$comment": "In-app products the iOS release may submit with a version (IOS_SUBMIT_REVIEW). Only these product ids are ever attached to App Review; products already approved are left alone. Must match SubscriptionProduct in ios/Quit All/Core/PaywallManager.swift and ios/Quit All/Products.storekit (checked by scripts/store/test_ios_release.py). Exported from App Store Connect on 2026-10-14, when all three were APPROVED.",
+  "app": {
+    "bundle_id": "com.apoorvdarshan.Quit-All",
+    "asc_app_id": "6760978934"
+  },
+  "entitlements": ["premium", "Quit All Premium"],
+  "subscriptions": [
+    {
+      "id": "com.quitall.premium.weekly",
+      "name": "Weekly",
+      "group": "premium",
+      "period": "P1W",
+      "asc_id": "6785867530"
+    },
+    {
+      "id": "com.quitall.premium.yearly",
+      "name": "Yearly",
+      "group": "premium",
+      "period": "P1Y",
+      "asc_id": "6760980033"
+    }
+  ],
+  "non_consumables": [
+    {
+      "id": "com.quitall.premium.lifetime",
+      "name": "Lifetime Premium",
+      "asc_id": "6768501377"
+    }
+  ]
+}

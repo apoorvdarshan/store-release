@@ -2,7 +2,7 @@
 # pyflakes rules only; formatting is left alone. The vendored fud-ai scripts are
 # verbatim copies and are not linted.
 target-version = "py313"
-extend-exclude = ["tests/parity/upstream_fud_ai_a99591908"]
+extend-exclude = ["tests/parity/upstream_*"]
 
 [lint]
 select = ["E9", "F"]

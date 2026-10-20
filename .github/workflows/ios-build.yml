@@ -198,13 +198,75 @@ jobs:
         run: >-
           python3 -I -u .store-release/run.py --app-root app ios verify-archive --archive "$RUNNER_TEMP/$STORE_RELEASE_SLUG.xcarchive"
           --version "$MARKETING_VERSION" --build "$BUILD_NUMBER"
+      # ios.build.extensions / app_groups: exactly the configured extensions, each signed for the
+      # team with its app groups (no-op without them).
+      - name: Verify the extensions and app groups in the archive
+        run: >-
+          python3 -I -u .store-release/run.py --app-root app ios verify-bundles
+          --apps "$RUNNER_TEMP/$STORE_RELEASE_SLUG.xcarchive/Products/Applications" --kind archive
+          --version "$MARKETING_VERSION" --build "$BUILD_NUMBER"
+      # ios.build.post_archive: app checks of the archived app, with no secret in the environment.
+      - name: Run the app's post-archive checks
+        run: |
+          set -euo pipefail
+          export ARCHIVE_PATH="$RUNNER_TEMP/$STORE_RELEASE_SLUG.xcarchive"
+          APP_PATH="$(find "$ARCHIVE_PATH/Products/Applications" -maxdepth 1 -name '*.app' | head -n1)"
+          export APP_PATH
+          python3 -I -u .store-release/run.py --app-root app hooks run --stage post_archive
       - name: Write export options
         run: |
           set -euo pipefail
           python3 -I -u .store-release/run.py --app-root app ios export-options --mode "$MODE" --out "$RUNNER_TEMP/ExportOptions.plist"
           plutil -lint "$RUNNER_TEMP/ExportOptions.plist"
+          if [ "$STORE_RELEASE_IOS_VERIFY_IPA" = true ]; then
+            python3 -I -u .store-release/run.py --app-root app ios export-options --mode validate --out "$RUNNER_TEMP/ExportOptions-export.plist"
+            plutil -lint "$RUNNER_TEMP/ExportOptions-export.plist"
+          fi
+      # ios.build.verify_ipa: export with cloud-managed App Store signing first and verify the
+      # signed app before anything is validated or uploaded (a release run exports again to upload).
+      - name: Export with cloud-managed App Store signing (verify_ipa)
+        if: env.STORE_RELEASE_IOS_VERIFY_IPA == 'true'
+        env:
+          ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          log="$RUNNER_TEMP/logs/export.log"
+          status=0
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/$STORE_RELEASE_SLUG.xcarchive" \
+            -exportPath "$RUNNER_TEMP/verify-export" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions-export.plist" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$ASC_KEY_PATH" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID" > "$log" 2>&1 || status=$?
+          grep -E '(error|warning): |\*\* EXPORT' "$log" || true
+          [ "$status" -eq 0 ] || { tail -n 60 "$log"; echo "error: export failed (full log in artifact)" >&2; exit "$status"; }
+          ipa="$(find "$RUNNER_TEMP/verify-export" -maxdepth 1 -name '*.ipa' | head -n1)"
+          [ -n "$ipa" ] || { echo "error: export produced no IPA" >&2; exit 1; }
+          echo "IPA_PATH=$ipa" >> "$GITHUB_ENV"
+      - name: Verify the App Store-signed app and extensions (verify_ipa)
+        if: env.STORE_RELEASE_IOS_VERIFY_IPA == 'true'
+        run: |
+          set -euo pipefail
+          unpacked="$RUNNER_TEMP/ipa"
+          rm -rf "$unpacked"
+          ditto -x -k "$IPA_PATH" "$unpacked"
+          python3 -I -u .store-release/run.py --app-root app ios verify-bundles --apps "$unpacked/Payload" \
+            --kind distribution --version "$MARKETING_VERSION" --build "$BUILD_NUMBER"
+      - name: Validate the verified IPA with App Store Connect (validation run, verify_ipa)
+        if: env.MODE == 'validate' && env.STORE_RELEASE_IOS_VERIFY_IPA == 'true'
+        env:
+          ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          xcrun altool --validate-app -f "$IPA_PATH" -t ios \
+            --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID" 2>&1 | tee "$RUNNER_TEMP/logs/validate.log"
+          echo "validated $MARKETING_VERSION ($BUILD_NUMBER) with App Store Connect — nothing uploaded"
       - name: Export and validate with App Store Connect (validation run)
-        if: env.MODE == 'validate'
+        if: env.MODE == 'validate' && env.STORE_RELEASE_IOS_VERIFY_IPA != 'true'
         env:
           ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
@@ -279,4 +341,5 @@ jobs:
           if [ -n "${SIGNING_KEYCHAIN:-}" ]; then
             security delete-keychain "$SIGNING_KEYCHAIN" 2>/dev/null || true
           fi
-          rm -rf "${RUNNER_TEMP:?}/asc-keys" "${RUNNER_TEMP:?}/signing.p12" "${RUNNER_TEMP:?}/export" "${RUNNER_TEMP:?}/wwdr-g3.cer"
+          rm -rf "${RUNNER_TEMP:?}/asc-keys" "${RUNNER_TEMP:?}/signing.p12" "${RUNNER_TEMP:?}/export" "${RUNNER_TEMP:?}/wwdr-g3.cer" \
+            "${RUNNER_TEMP:?}/verify-export" "${RUNNER_TEMP:?}/ipa"

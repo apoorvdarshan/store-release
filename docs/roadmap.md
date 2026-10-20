@@ -1,9 +1,14 @@
 # Roadmap
 
-v0.1.0 is Fud AI's pipeline. The other apps move one per minor release. Each release
-adds only optional keys or enum values whose defaults keep Fud AI's behaviour, and
-ships with that app's fixture config, differential tests against that app's own
-scripts, and a clean store-plan on the app's migration branch before it merges.
+v0.1.0 is Fud AI's pipeline. v0.2.0 runs the other five apps' pipelines too, in one
+release, as ported flows ([flows.md](flows.md)): each app's scripts moved verbatim and
+selected by `ios.flow` / `android.flow`, with the shared workflow steps driven by new
+optional config keys whose defaults keep Fud AI's behaviour. Each app moves over in
+its own pull request after a clean validation dispatch ([examples/MIGRATING.md](../examples/MIGRATING.md)).
+
+The table below was the earlier one-app-per-release plan. Its config hooks are what
+the flows now carry inside them; turning them into shared keys is the unification
+work that follows:
 
 | Release | App | Config hooks to add | App-side and ruleset items (Apoorv approves the marked ones) | Also handled |
 |---|---|---|---|---|
@@ -16,7 +21,11 @@ scripts, and a clean store-plan on the app's migration branch before it merges.
 
 Later, not in any of these:
 
-- OpenSSF Scorecard and fuzzing for store-release itself.
+- Unifying the six flows into one engine with per-app keys (the table above), one app
+  at a time, with that app's suite and inventory as the safety net.
+- ABYSM's and PCM Notes' Atheris fuzz targets for the store scripts.
+
+- OpenSSF Scorecard and fuzzing for store-release itself (fuzz targets for the flows).
 - Splitting Sigstore signing out of the Gradle job, so app code never holds
   `id-token: write`.
 - Uploading the verified IPA instead of exporting it twice.

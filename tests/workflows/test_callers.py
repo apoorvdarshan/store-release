@@ -5,6 +5,8 @@ from __future__ import annotations
 import copy
 import io
 import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 import urllib.error
@@ -272,3 +274,74 @@ class RenderCommandTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+PORTED = ("scowld", "verceltics", "abysm", "pcm-notes", "quit-all")
+
+
+class PortedAppCallerTests(unittest.TestCase):
+    """The five ported apps' callers: rendered from their configs, as each app's own workflow ran."""
+
+    def rendered(self, app: str, platform: str) -> dict:
+        cfg = config.load(EXAMPLES / app / "store-release.toml")
+        return yaml.safe_load(callers.render(cfg, platform, sha=SHA, version=__version__,
+                                             app_repository=f"apoorvdarshan/{app}"))
+
+    def test_the_examples_are_the_renderer_output(self) -> None:
+        result = subprocess.run([sys.executable, "-I", str(TOOL_ROOT / "scripts" / "render_examples.py"), "--check"],
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for app in PORTED:
+            names = sorted(p.name for p in (EXAMPLES / app / "callers").glob("*.yml"))
+            expected = ["android-release.yml", "ios-release.yml", "store-checks.yml"] if app == "verceltics" else [
+                "ios-release.yml", "store-checks.yml"]
+            self.assertEqual(names, expected, app)
+
+    def test_gate_policies(self) -> None:
+        pcm = self.rendered("pcm-notes", "ios")["jobs"]
+        self.assertEqual(pcm["tests"]["needs"], "prepare")
+        self.assertEqual(pcm["tests"]["if"],
+                         "needs.prepare.outputs.mode == 'release' && needs.prepare.outputs.upload_build == 'true'")
+        self.assertIn("needs.prepare.outputs.mode == 'validate'", pcm["build"]["if"])
+        self.assertIn("needs.prepare.outputs.upload_build != 'true' && needs.wait-for-build.result == 'skipped'",
+                      " ".join(pcm["app-store-connect"]["if"].split()))
+        self.assertIn("needs.prepare.outputs.asc != 'true' || needs.app-store-connect.result == 'success'",
+                      " ".join(pcm["github-release"]["if"].split()))
+        quit_all = self.rendered("quit-all", "ios")["jobs"]
+        self.assertEqual((quit_all["tests"]["needs"], quit_all["tests"]["if"]), ("prepare", "github.event_name == 'push'"))
+        self.assertEqual(quit_all["build"]["needs"], ["prepare", "tests"])
+        for app in ("scowld", "verceltics", "abysm"):
+            jobs = self.rendered(app, "ios")["jobs"]
+            gate = next(iter(jobs))
+            self.assertNotIn("needs", jobs[gate], app)
+            self.assertEqual(jobs[gate]["if"], "github.event_name == 'push'")
+        self.assertEqual(next(iter(self.rendered("abysm", "ios")["jobs"])), "quality")
+
+    def test_source_archive_job(self) -> None:
+        jobs = self.rendered("scowld", "ios")["jobs"]
+        archive = jobs["source-archive"]
+        self.assertTrue(archive["uses"].startswith("apoorvdarshan/store-release/.github/workflows/ios-source-archive.yml@"))
+        self.assertEqual(archive["permissions"], {"contents": "read", "id-token": "write", "attestations": "write"})
+        self.assertIn("source-archive", jobs["github-release"]["needs"])
+        self.assertIn("needs.source-archive.result == 'success'", jobs["github-release"]["if"])
+        self.assertEqual(jobs["github-release"]["permissions"], {"contents": "write"})
+        for app in ("verceltics", "abysm", "pcm-notes", "quit-all"):
+            self.assertNotIn("source-archive", self.rendered(app, "ios")["jobs"], app)
+
+    def test_verceltics_android_caller(self) -> None:
+        jobs = self.rendered("verceltics", "android")["jobs"]
+        self.assertEqual(jobs["quality"]["uses"], "./.github/workflows/ci.yml")
+        self.assertEqual(jobs["quality"]["with"], {"android-release": True})
+        self.assertIs(jobs["release"]["with"]["keystore_only"], True)
+        self.assertEqual(sorted(jobs["release"]["secrets"]),
+                         ["ANDROID_KEYSTORE_BASE64", "ANDROID_KEYSTORE_PASSWORD", "PLAY_SERVICE_ACCOUNT_JSON"])
+
+    def test_every_rendered_job_declares_its_permissions(self) -> None:
+        for app in PORTED:
+            cfg = config.load(EXAMPLES / app / "store-release.toml")
+            for platform in FILES:
+                if platform == "android" and cfg.android is None:
+                    continue
+                for job_id, job in self.rendered(app, platform)["jobs"].items():
+                    with self.subTest(app=app, job=job_id):
+                        self.assertIn("permissions", job)
