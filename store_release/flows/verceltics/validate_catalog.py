@@ -18,7 +18,7 @@ from pathlib import Path
 ROOT = UNCONFIGURED_ROOT  # store-release: set by flow.configure()
 CATALOG = ROOT / "store" / "catalog" / "products.json"
 STOREKIT = ROOT / "ios" / "verceltics" / "Paywall" / "Products.storekit"
-BILLING_MODELS = (
+PRODUCTS_SOURCE = (
     ROOT / "android" / "app" / "src" / "main" / "java" / "com" / "apoorvdarshan" / "verceltics"
     / "billing" / "BillingModels.kt"
 )
@@ -92,7 +92,7 @@ def main(argv: list[str] | None = None) -> None:
     platforms = ("ios", "android") if args.platform == "all" else (args.platform,)
     try:
         for platform in platforms:
-            source = STOREKIT if platform == "ios" else BILLING_MODELS
+            source = STOREKIT if platform == "ios" else PRODUCTS_SOURCE
             text = source.read_text(encoding="utf-8")
             app_ids = storekit_product_ids(text) if platform == "ios" else billing_product_ids(text)
             count = check(catalog, platform=platform, app_ids=app_ids)

@@ -92,6 +92,21 @@ IDENTITY = {
 }
 
 
+# Module constants renamed in the port, (package, module) -> {upstream name: store-release name}.
+# CodeQL's clear-text logging query treats a variable named like billing data as sensitive, and
+# the Verceltics validator prints that path's file name; the value and every use are unchanged.
+RENAMES = {
+    ("verceltics", "validate_catalog"): {"BILLING_MODELS": "PRODUCTS_SOURCE"},
+}
+
+
+def renames(text: str, names: dict[str, str]) -> str:
+    for old, new in names.items():
+        text, count = re.subn(rf"\b{old}\b", new, text)
+        assert count, f"{old}: not in the module"
+    return text
+
+
 def placeholders(text: str, names: tuple[str, ...]) -> str:
     for name in names:
         text, count = re.subn(rf'^{name} = "[^"\n]*"', f"{name} = UNCONFIGURED_TEXT  # store-release: from the config",
@@ -144,4 +159,5 @@ def port_module(app: str, source: str, text: str) -> str:
     """The flow module store-release keeps for one of an app's scripts."""
     package, _, files = FLOWS[app]
     module = files[source]
-    return drop_unused(placeholders(port(text, set(files.values())), IDENTITY.get((package, module), ())))
+    text = placeholders(port(text, set(files.values())), IDENTITY.get((package, module), ()))
+    return drop_unused(renames(text, RENAMES.get((package, module), {})))

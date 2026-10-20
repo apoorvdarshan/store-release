@@ -131,11 +131,12 @@ class ConfigureTests(unittest.TestCase):
                     package = flows.flow_package(app)
                     for name, original in upstream.items():
                         ported = importlib.import_module(f"{package.__name__}.{name}")
+                        renamed = port.RENAMES.get((port.FLOWS[app][0], name), {})
                         for key, value in vars(original).items():
                             if not key.isupper() or key.startswith("UNCONFIGURED_"):
                                 continue
-                            self.assertEqual(comparable(getattr(ported, key, "<missing>")), comparable(value),
-                                             f"{app} {name}.{key}")
+                            self.assertEqual(comparable(getattr(ported, renamed.get(key, key), "<missing>")),
+                                             comparable(value), f"{app} {name}.{key}")
                         left = [n for n in rebind.unconfigured_values(
                             ported, (flows.UNCONFIGURED_ROOT, flows.UNCONFIGURED_TEXT)) if not n.startswith("UNCONF")]
                         self.assertEqual(left, [], f"{app} {name}")

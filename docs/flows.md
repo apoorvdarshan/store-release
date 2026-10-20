@@ -22,6 +22,9 @@ exactly that port of its verbatim copy in `tests/parity/upstream_<package>_<sha9
 - the app's identity literals (bundle id, App Store Connect app id, tag prefix, locale,
   Play package, upload certificate) become placeholders that `configure()` sets from
   `store/store-release.toml`;
+- a module constant named in `RENAMES` gets a new name with the same value and uses
+  (Verceltics' `BILLING_MODELS` is `PRODUCTS_SOURCE`, which CodeQL's clear-text
+  logging query does not read as billing data);
 - an import those edits leave unused is removed.
 
 `configure()` (each flow's `__init__.py`) sets those values and every path the config

@@ -42,11 +42,17 @@ jobs:
         with:
           persist-credentials: false
 
+      # tests/parity/upstream_*/ are verbatim, hashed copies of the apps' own scripts and tests
+      # (docs/provenance.md): they never run outside the test suites, can never be edited here,
+      # and each app's own CodeQL analyses them. Everything store-release runs is analysed.
       - name: Initialize CodeQL
         uses: github/codeql-action/init@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
         with:
           languages: ${{ matrix.language }}
           build-mode: none
+          config: |
+            paths-ignore:
+              - tests/parity/upstream_*/**
 
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0

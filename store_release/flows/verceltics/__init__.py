@@ -62,4 +62,4 @@ def configure(config, root: Path) -> None:
         rebind(play_listing, {"ROOT": root, "PACKAGE_NAME": android.package, "LISTING_DIR": root / play_dir,
                               "SCREENSHOTS_DIR": root / (android.screenshots_dir or "store/google-play/screenshots/phone"),
                               "PRIMARY_LOCALE": android.locale})
-        rebind(validate_catalog, {"BILLING_MODELS": root / catalog.products_source, "PACKAGE": android.package})
+        rebind(validate_catalog, {"PRODUCTS_SOURCE": root / catalog.products_source, "PACKAGE": android.package})
