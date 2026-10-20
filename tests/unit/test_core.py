@@ -927,6 +927,16 @@ class ConfigExportTests(unittest.TestCase):
         self.assertFalse([line for line in android if "_IOS_" in line])
         both = quiet(stage.config_export, cfg, "checks", environ={})
         self.assertTrue([line for line in both if "_IOS_" in line] and [line for line in both if "_ANDROID_" in line])
+        self.assertIn("STORE_RELEASE_HAS_IOS=true", both)
+        self.assertIn("STORE_RELEASE_HAS_ANDROID=true", both)
+        # Store checks skip the steps of a platform the app does not have.
+        data = fud_ai_data()
+        del data["android"]
+        ios_only = quiet(stage.config_export, config.parse(data), "checks", environ={})
+        self.assertIn("STORE_RELEASE_HAS_IOS=true", ios_only)
+        self.assertIn("STORE_RELEASE_HAS_ANDROID=false", ios_only)
+        self.assertFalse([line for line in ios_only if "_ANDROID_" in line and "HAS_" not in line])
+        self.assertFalse([line for line in lines + android if "_HAS_" in line], "only the checks job needs them")
 
     def test_unsafe_values_and_missing_platforms_fail(self) -> None:
         data = fud_ai_data()

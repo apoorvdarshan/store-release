@@ -1,7 +1,7 @@
 # Release store-release: dispatch-only, from main. scripts/release_check.py verifies
 # everything (version, CHANGELOG section, yanked list, this commit's required CI)
-# before the tag exists; the tag and the GitHub Release are created only after it
-# passes. Process: docs/release-process.md.
+# before the tag exists; the tag and the GitHub Release are then created together,
+# in one call. Process: docs/release-process.md.
 name: Release
 
 on:
@@ -30,6 +30,7 @@ jobs:
     permissions:
       contents: write   # create the tag and the GitHub Release
       checks: read      # read this commit's CI results
+      actions: read     # which workflow runs those results belong to
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -42,12 +43,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.version }}
         run: python3 -I scripts/release_check.py --version "$VERSION" --sha "$GITHUB_SHA" --notes-out "$RUNNER_TEMP/notes.md"
+      # One call creates the tag on this commit and publishes the release, so a failure
+      # cannot leave a tag without its release (immutable releases lock the tag as it is
+      # created). The check above found no vX.Y.Z tag; the last lines confirm where it points.
       - name: Create the tag and the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/v$VERSION" -f sha="$GITHUB_SHA" > /dev/null
-          gh release create "v$VERSION" --repo "$GITHUB_REPOSITORY" --verify-tag \
+          gh release create "v$VERSION" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
             --title "v$VERSION" --notes-file "$RUNNER_TEMP/notes.md" --latest
+          tagged="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v$VERSION" --jq .object.sha)"
+          if [ "$tagged" != "$GITHUB_SHA" ]; then
+            echo "error: v$VERSION points at $tagged, not $GITHUB_SHA" >&2
+            exit 1
+          fi
+          echo "v$VERSION is $GITHUB_SHA"

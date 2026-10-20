@@ -31,7 +31,11 @@ pipelines, so changes land carefully.
 - **No credentials** in the repository, ever: no keys, certificates, keystores,
   service-account JSON or tokens, not even expired ones. Tests generate what they
   need at run time.
-- Pin third-party actions by full commit SHA with a `# vX.Y.Z` comment, and Python
-  dependencies by hash (`pip-compile --generate-hashes`, pip-tools 7.6.2, Python 3.13).
+- Pin third-party actions by full commit SHA with a `# vX.Y.Z` comment, with the same
+  pin for an action in every file (a test enforces it, so Dependabot's grouped bump
+  passes and a half-applied one fails), and Python dependencies by hash
+  (`pip-compile --generate-hashes`, pip-tools 7.6.2, Python 3.13).
+- Every job declares its `permissions`, and the rendered callers do too (tests
+  enforce both).
 
 Security issues: see [SECURITY.md](SECURITY.md), not public issues.
