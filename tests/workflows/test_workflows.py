@@ -191,6 +191,38 @@ class ReusableWorkflowTests(unittest.TestCase):
                 self.assertIn("inputs.play_tracks != ''", step["if"])
                 self.assertNotIn("releaseName", step["with"])
 
+    def test_what_can_fail_runs_before_anything_is_built(self) -> None:
+        def steps(name: str) -> list[dict]:
+            return only_job(load(name))[1]["steps"]
+
+        def index(found: list[dict], name: str) -> int:
+            return [step.get("name") for step in found].index(name)
+
+        # The config's pins on every iOS prepare (fud-ai's unit tests checked these facts there).
+        prepare = steps("ios-prepare.yml")
+        pinned = prepare[index(prepare, "Check the app files the config pins")]
+        self.assertNotIn("if", pinned)
+        self.assertEqual(pinned["run"], "python3 -I -u .store-release/run.py --app-root app config check --pinned")
+        self.assertLess(index(prepare, "Check the app files the config pins"), index(prepare, "Resolve iOS release switches"))
+        self.assertIn("config check --files", "\n".join(step.get("run", "") for step in steps("checks.yml")))
+        # STORE_SYNC_REVENUECAT on every Android tag run, before anything is built; the gate stays in the release job.
+        gates = steps("android-gates.yml")
+        switch = gates[index(gates, "Check the RevenueCat switch")]
+        self.assertEqual(switch["if"], "github.event_name == 'push'")
+        self.assertEqual(switch["env"], {"STORE_SYNC_REVENUECAT": "${{ vars.STORE_SYNC_REVENUECAT }}"})
+        self.assertIn("revenuecat-gate --check-switch", switch["run"])
+        publish = steps("android-publish.yml")
+        gate = publish[index(publish, "RevenueCat catalog sync (gated)")]
+        self.assertEqual(gate["run"], "python3 -I -u .store-release/run.py --app-root app revenuecat-gate")
+        self.assertLess(index(publish, "Play listing / screenshots upload"), index(publish, "RevenueCat catalog sync (gated)"))
+
+    def test_the_plans_name_store_releases_own_commit(self) -> None:
+        for name in ("ios-store-plan.yml", "android-store-plan.yml"):
+            plan = [step for step in only_job(load(name))[1]["steps"] if step.get("name", "").startswith("Plan what")]
+            with self.subTest(workflow=name):
+                self.assertEqual(len(plan), 1)
+                self.assertEqual(plan[0]["env"]["TOOL_SHA"], "${{ job.workflow_sha }}")
+
     def test_the_build_job_never_installs_the_lock(self) -> None:
         for _, script in self.run_scripts("ios-build.yml"):
             self.assertNotIn("pip install", script)

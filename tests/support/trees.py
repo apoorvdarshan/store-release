@@ -6,9 +6,11 @@ the ported tests that read "the repository's" files read these instead.
 """
 from __future__ import annotations
 
+import functools
 import json
 import plistlib
 import shutil
+import tomllib
 from pathlib import Path
 
 from support import pngs
@@ -151,9 +153,35 @@ def write_text(root: Path, relative: str, text: str) -> Path:
     return path
 
 
-def creative(root: Path, folder: str = "store/creative/ios") -> None:
-    pngs.write(root / folder / "header" / "fud-ai-header-orb-horizon.png", pngs.rgb(3840, 1646))
-    pngs.write(root / folder / "search-results" / "fud-ai-search-voice.png", pngs.rgb(3840, 2560))
+@functools.lru_cache(maxsize=8)
+def sized_rgb(width: int, height: int, size: int | None) -> bytes:
+    """An RGB PNG, grown to exactly size bytes (when given) with a private chunk before IEND."""
+    raw = pngs.rgb(width, height)
+    if size is None:
+        return raw
+    filler = size - len(raw) - 12
+    if filler < 0:
+        raise ValueError(f"a {width}x{height} PNG is already {len(raw)} bytes, more than {size}")
+    iend = len(raw) - 12
+    return raw[:iend] + pngs.chunk(b"prVt", b"\0" * filler) + raw[iend:]
+
+
+def creative(root: Path, folder: str = "store/creative/ios", *, sizes: dict[str, int] | None = None) -> None:
+    """The two Fud AI images; with sizes (ios.creative.sizes), each exactly its pinned size."""
+    sizes = sizes or {}
+    for relative, (width, height) in (("header/fud-ai-header-orb-horizon.png", (3840, 1646)),
+                                      ("search-results/fud-ai-search-voice.png", (3840, 2560))):
+        pngs.write(root / folder / relative, sized_rgb(width, height, sizes.get(relative)))
+
+
+def pinned_sizes(config_text: str) -> dict[str, int]:
+    """ios.creative.sizes of a config text, or {} (also for text that is not valid TOML)."""
+    try:
+        data = tomllib.loads(config_text)
+    except tomllib.TOMLDecodeError:
+        return {}
+    sizes = ((data.get("ios") or {}).get("creative") or {}).get("sizes")
+    return dict(sizes) if isinstance(sizes, dict) else {}
 
 
 def fud_ai_screenshots(root: Path) -> None:
@@ -170,8 +198,8 @@ def fud_ai_screenshots(root: Path) -> None:
 def write_fud_ai_tree(root: Path, *, screenshots: bool = False, config: str | None = None) -> Path:
     """Fud AI's shape: 7 targets x Debug/Release at 7.2 (39), listing docs, catalog, creative images."""
     root.mkdir(parents=True, exist_ok=True)
-    write_text(root, "store/store-release.toml",
-               config if config is not None else (EXAMPLES / "fud-ai" / "store-release.toml").read_text())
+    text = config if config is not None else (EXAMPLES / "fud-ai" / "store-release.toml").read_text()
+    write_text(root, "store/store-release.toml", text)
     targets = {name: {} for name in FUD_AI_TARGETS}
     targets["calorietracker"] = {"INFOPLIST_FILE": "calorietracker/Info.plist", "GENERATE_INFOPLIST_FILE": "YES"}
     write_text(root, "ios/calorietracker.xcodeproj/project.pbxproj",
@@ -191,7 +219,8 @@ def write_fud_ai_tree(root: Path, *, screenshots: bool = False, config: str | No
     write_text(root, "android/app/build.gradle.kts", gradle(version_name="7.2", version_code=42, package=PREFIX))
     write_text(root, ".github/workflows/ios-tests.yml", STUB_WORKFLOW.format(name="iOS tests", job="ios-tests"))
     write_text(root, ".github/workflows/quality.yml", STUB_WORKFLOW.format(name="Quality checks", job="web"))
-    creative(root)
+    # The pinned sizes (ios.creative.sizes) are Fud AI's real ones, so the images are grown to them.
+    creative(root, sizes=pinned_sizes(text))
     if screenshots:
         fud_ai_screenshots(root)
     return root

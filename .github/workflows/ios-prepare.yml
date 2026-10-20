@@ -119,6 +119,10 @@ jobs:
       # New, release notes and log redaction behave as the store steps expect.
       - name: Test the store release tooling (offline)
         run: python3 -I -u .store-release/run.py selftest --platform ios
+      # What the config pins about the app's own files, on every run (fud-ai's unit tests
+      # checked these in the real files here): ios.export_compliance and ios.creative.sizes.
+      - name: Check the app files the config pins
+        run: python3 -I -u .store-release/run.py --app-root app config check --pinned
       # A pin the release tag does not point at is only a warning here (Store checks fail on it).
       - name: Check the caller workflow
         env:

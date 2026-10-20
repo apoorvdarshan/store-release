@@ -125,6 +125,24 @@ def archive_bundles(main: Path) -> list[Path]:
     return bundles
 
 
+def plist_text(value: object) -> str | None:
+    """A version value as fud-ai's PlistBuddy check compared it: a string as is, an integer in
+    decimal (PlistBuddy prints both the same way); None for a missing key or any other type."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, int) and not isinstance(value, bool):
+        return str(value)
+    return None
+
+
+def shown_value(value: object) -> str:
+    if value is None:
+        return "missing"
+    if isinstance(value, str):
+        return value
+    return f"{value!r} (a {type(value).__name__}, not a string)"
+
+
 def verify_archive(archive: Path, *, bundle_id: str, version: str, build: str) -> tuple[str, int]:
     """Check the archive; returns (main app Info.plist path, bundles checked)."""
     apps = archive / "Products" / "Applications"
@@ -140,9 +158,10 @@ def verify_archive(archive: Path, *, bundle_id: str, version: str, build: str) -
         plist = read_plist(bundle / "Info.plist")
         short = plist.get("CFBundleShortVersionString")
         number = plist.get("CFBundleVersion")
-        if short != version or number != build:
+        if plist_text(short) != version or plist_text(number) != build:
             shown = bundle.relative_to(apps).as_posix()
-            raise ArchiveError(f"{shown} is {short} ({number}), expected {version} ({build})")
+            raise ArchiveError(f"{shown} is {shown_value(short)} ({shown_value(number)}), "
+                               f"expected {version} ({build})")
         checked += 1
     return str(main / "Info.plist"), checked
 

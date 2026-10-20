@@ -13,6 +13,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
+from store_release import __version__
 from store_release.ios import archive
 from store_release.ios import asc as asc_release
 from store_release.ios import release as ios_release
@@ -61,6 +62,28 @@ class ArchiveVerifyTests(unittest.TestCase):
         with self.assertRaisesRegex(archive.ArchiveError,
                                     r"Fud AI.app/Watch/FudAIWatchApp.app/PlugIns/WatchWidgets.appex is 7.2 \(39\), "
                                     r"expected 7.2 \(40\)"):
+            archive.verify_archive(self.archive, bundle_id=BUNDLE, version="7.2", build="40")
+
+    def test_versions_compare_as_plistbuddy_prints_them(self) -> None:
+        # fud-ai compared PlistBuddy's text, so an <integer> build number matched its decimal string.
+        with self.main.joinpath("Info.plist").open("rb") as handle:
+            plist = plistlib.load(handle)
+        plist["CFBundleVersion"] = 40
+        (self.main / "Info.plist").write_bytes(plistlib.dumps(plist, fmt=plistlib.FMT_XML))
+        self.assertEqual(archive.verify_archive(self.archive, bundle_id=BUNDLE, version="7.2", build="40")[1], 5)
+        # Any other type, or a missing key, fails and says why instead of printing the same value twice.
+        plist["CFBundleVersion"] = 40.0
+        (self.main / "Info.plist").write_bytes(plistlib.dumps(plist, fmt=plistlib.FMT_XML))
+        with self.assertRaisesRegex(archive.ArchiveError, r"Fud AI.app is 7.2 \(40.0 \(a float, not a string\)\), "
+                                                          r"expected 7.2 \(40\)"):
+            archive.verify_archive(self.archive, bundle_id=BUNDLE, version="7.2", build="40")
+        plist["CFBundleVersion"] = True
+        (self.main / "Info.plist").write_bytes(plistlib.dumps(plist, fmt=plistlib.FMT_XML))
+        with self.assertRaisesRegex(archive.ArchiveError, r"\(True \(a bool, not a string\)\)"):
+            archive.verify_archive(self.archive, bundle_id=BUNDLE, version="7.2", build="40")
+        del plist["CFBundleVersion"]
+        (self.main / "Info.plist").write_bytes(plistlib.dumps(plist, fmt=plistlib.FMT_XML))
+        with self.assertRaisesRegex(archive.ArchiveError, r"Fud AI.app is 7.2 \(missing\), expected 7.2 \(40\)"):
             archive.verify_archive(self.archive, bundle_id=BUNDLE, version="7.2", build="40")
 
     def test_identity_and_missing_app(self) -> None:
@@ -420,6 +443,15 @@ class StorePlanTests(unittest.TestCase):
         saved = _json.loads((self.tmp / "plan" / "store-plan.json").read_text())
         self.assertEqual(saved["status"], "store-plan: CLEAN")
         self.assertEqual([w["path"] for w in saved["writes"]], ["/appStoreVersions"])
+
+    def test_the_header_names_the_store_release_commit_only(self) -> None:
+        # In a called workflow GITHUB_WORKFLOW_SHA is the caller's (the app's) commit: never shown as store-release's.
+        fakes = (PlanAsc(versions=[("7.1.2", "READY_FOR_SALE")], builds=["40"]) for _ in range(2))
+        _, out, _ = self.plan({"GITHUB_WORKFLOW_SHA": "a" * 40}, next(fakes))
+        self.assertEqual(out.splitlines()[0], f"store-plan ios: Fud AI 7.2 (tag ios-v7.2), store-release v{__version__}")
+        _, out, _ = self.plan({"GITHUB_WORKFLOW_SHA": "a" * 40, "TOOL_SHA": "b" * 40}, next(fakes))
+        self.assertEqual(out.splitlines()[0],
+                         f"store-plan ios: Fud AI 7.2 (tag ios-v7.2), store-release v{__version__} ({'b' * 40})")
 
     def test_a_missing_version_without_create_is_a_problem(self) -> None:
         fake = PlanAsc(versions=[("7.1.2", "READY_FOR_SALE")])

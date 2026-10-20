@@ -1721,7 +1721,8 @@ class CreativeAssetTests(unittest.TestCase):
         self.assertEqual([(placement, path.name) for placement, _, path in sources],
                          [("PRODUCT_PAGE_HEADER_ASSET", "fud-ai-header-orb-horizon.png"),
                           ("APP_STORE_SEARCH_RESULTS_ASSET", "fud-ai-search-voice.png")])
-        # The live byte sizes (1763332, 2670930) are checked by the canary (tests/canary/fud-ai.toml).
+        # The live byte sizes (1763332, 2670930) are pinned by ios.creative.sizes in Fud AI's config and
+        # checked by config check (Store checks and every prepare).
 
     def preflight(self, fake: FakeAsc, *, submit: bool = False) -> str:
         return quiet(ios_release.version_preflight, fake, asc_release, version=VERSION, metadata=True,

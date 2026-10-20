@@ -2,10 +2,10 @@
 
 The checks.yml sequence without the pins, caller, yanked and artifact steps
 (those compare an app's pinned version, which a canary of this commit is not),
-plus the expectations in tests/canary/<app>.toml: the creative images' names
-and byte sizes (the Asset Library matches by name and size) and the staged
-screenshot sets. Every step runs; the canary fails if any failed. It never
-uploads anything.
+plus the expectations in tests/canary/<app>.toml: the staged screenshot sets.
+The config check verifies what the app's config pins (the export compliance
+answer, the creative images' names and sizes). Every step runs; the canary
+fails if any failed. It never uploads anything.
 """
 from __future__ import annotations
 
@@ -98,12 +98,6 @@ def run(app_root: Path, expectations: dict[str, Any], work: Path) -> int:
                               f"{folder}/{path.name} is {found_width}x{found_height}, expected {width}x{height}")
                 if folder.startswith("ios/"):
                     canary.expect(colour == 2, f"{folder}/{path.name} is RGB without alpha (colour type {colour})")
-    creative_root = app_root / (expectations.get("creative_dir") or "store/creative/ios")
-    for relative, size in (expectations.get("creative") or {}).items():
-        path = creative_root / relative
-        found = path.stat().st_size if path.is_file() else None
-        canary.expect(found == size, f"creative {relative}: {found} bytes, expected {size} "
-                                     "(the Asset Library matches images by name and size)")
     if canary.failures:
         print(f"canary: {len(canary.failures)} failure(s):")
         for failure in canary.failures:

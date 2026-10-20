@@ -26,7 +26,8 @@ USAGE = """usage: run.py [--app-root DIR] [--config PATH] <command> [args...]
 commands:
   selftest           run store-release's own tests (see selftest --help)
   tool check         the tooling checkout is this workflow's commit
-  config check       load and validate the app's store-release.toml (--files: every named file exists)
+  config check       load and validate the app's store-release.toml (--files: every named file exists
+                     and what the config pins holds; --pinned: only the pins)
   config export      write STORE_RELEASE_* for a job to $GITHUB_ENV
   paths              print a job's sparse-checkout patterns
   stage check        re-validate a stage's inputs and gate results
@@ -40,6 +41,7 @@ commands:
   release-notes      the tag's reviewed release notes (or --check-headings)
   catalog check      the product catalog's generic rules, then the app's catalog hooks
   revenuecat-gate    count the catalog; fail closed when STORE_SYNC_REVENUECAT is on
+                     (--check-switch: only read the switch, before anything is built)
   listing prepare    listing text from the listing docs (--out required)
   whats-new prepare  What's New from the listing docs (--out required)
   screenshots stage  stage screenshots for upload (--out required)
@@ -230,13 +232,23 @@ def run(argv: list[str]) -> int:
 
         if sub == "check":
             parser = argparse.ArgumentParser(prog="config check")
-            parser.add_argument("--files", action="store_true")
+            parser.add_argument("--files", action="store_true",
+                                help="every file the config names exists, and what it pins holds")
+            parser.add_argument("--pinned", action="store_true",
+                                help="only what the config pins about the app's files (ios.export_compliance, "
+                                     "ios.creative.sizes)")
             ns = parser.parse_args(args)
             platforms = [name for name, value in (("ios", app.config.ios), ("android", app.config.android)) if value]
             print(f"{config_path}: schema {app.config.schema}, {app.config.app.name} ({', '.join(platforms)})")
             if ns.files:
                 checked = config_mod.check_files(app.config, app.root)
                 print(f"every file and folder the config names exists ({len(checked)} checked)")
+            if ns.files or ns.pinned:
+                pinned = config_mod.check_pinned(app.config, app.root)
+                for line in pinned:
+                    print(f"pinned: {line}")
+                if not pinned:
+                    print("the config pins nothing about the app's files")
             return 0
         parser = argparse.ArgumentParser(prog="config export")
         parser.add_argument("--job", required=True)
@@ -297,9 +309,16 @@ def run(argv: list[str]) -> int:
         catalog.check()
         return 0
     if command == "revenuecat-gate":
+        parser = argparse.ArgumentParser(prog="revenuecat-gate")
+        parser.add_argument("--check-switch", action="store_true",
+                            help="only read STORE_SYNC_REVENUECAT (invalid values fail); the gate runs later")
+        ns = parser.parse_args(rest)
         from store_release import catalog  # noqa: PLC0415
 
-        catalog.revenuecat_gate()
+        if ns.check_switch:
+            catalog.check_switch()
+        else:
+            catalog.revenuecat_gate()
         return 0
     if command in ("listing", "whats-new", "screenshots"):
         verb = {"listing": "prepare", "whats-new": "prepare", "screenshots": "stage"}[command]

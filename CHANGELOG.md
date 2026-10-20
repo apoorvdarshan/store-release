@@ -24,6 +24,12 @@ Impact: release-path (the first release)
   differential parity suite against the vendored fud-ai scripts, workflow tests,
   and docs tests.
 - Fud AI's config and rendered callers in `examples/fud-ai/`.
+- Pins on an app's own files, `ios.export_compliance` and `ios.creative.sizes`,
+  checked by `config check --files` (Store checks) and `config check --pinned`
+  (every iOS prepare): fud-ai's unit tests pinned these facts in its real files, and
+  Fud AI's config pins them (export compliance `NO`; the two Asset Library images).
+- `revenuecat-gate --check-switch` in Android gates: an invalid
+  `STORE_SYNC_REVENUECAT` fails a tag run before anything is built.
 - Pin checks against the release tag: `pins check` and `caller check --pr` (Store
   checks) fail unless store-release's `vX.Y.Z` tag points at the pinned commit,
   `caller check --runtime` (prepare, gates) warns, and `callers render` refuses an

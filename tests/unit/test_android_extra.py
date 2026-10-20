@@ -166,6 +166,7 @@ import subprocess as _subprocess  # noqa: E402
 import tempfile as _tempfile  # noqa: E402
 from pathlib import Path as _Path  # noqa: E402
 
+from store_release import __version__  # noqa: E402
 from store_release.android import plan as android_plan  # noqa: E402
 from support import pngs as _pngs  # noqa: E402
 from support.play_fakes import FakePlay  # noqa: E402
@@ -217,6 +218,13 @@ class AndroidStorePlanTests(unittest.TestCase):
         self.assertIn("would upload versionCode 42 to internal (highest on Play: 41)", out)
         self.assertEqual(out.splitlines()[-1], "store-plan: CLEAN")
         self.assertEqual(result["reads"], ["apks", "bundles", "listing", "tracks"])
+
+    def test_the_header_names_the_store_release_commit(self) -> None:
+        _, out, _, _ = self.plan({}, env={"GITHUB_WORKFLOW_SHA": "a" * 40})
+        self.assertEqual(out.splitlines()[0], "store-plan android: Fud AI 7.2 (versionCode 42, tag android-v7.2), "
+                                              f"store-release v{__version__}")
+        _, out, _, _ = self.plan({}, env={"GITHUB_WORKFLOW_SHA": "a" * 40, "TOOL_SHA": "b" * 40})
+        self.assertTrue(out.splitlines()[0].endswith(f"store-release v{__version__} ({'b' * 40})"), out)
 
     def test_an_old_version_code_is_a_problem(self) -> None:
         play = FakePlay(bundles=[42], tracks={"production": [(42, "completed")]})

@@ -35,6 +35,11 @@ python3 -I -u path/to/store-release/run.py --app-root . config check --files
 - **Hook keys** (marked *hook*) accept exactly one value in this version. They exist
   so a later release can add values without a schema change; the default is
   today's behaviour.
+- **Pins** (marked *pin*) state facts about the app's own files that must not change
+  by accident. `config check --files` (Store checks) and `config check --pinned`
+  (every iOS prepare, before anything else) fail when one no longer holds, so a change
+  is a reviewed edit of the pin. They replace the unit tests that pinned these facts
+  in fud-ai's real files.
 - **A switch needs its table.** A switch that is on while its table is missing fails
   in the gates, naming the table: `IOS_UPLOAD_LISTING is on, but
   store/store-release.toml has no [ios.listing]`. `IOS_SUBMIT_REVIEW` needs
@@ -65,6 +70,7 @@ python3 -I -u path/to/store-release/run.py --app-root . config check --files
 | `ios.scheme` | str | required | the scheme to archive |
 | `ios.app_target` | str | required | the target whose configurations decide export compliance |
 | `ios.info_plist` | path | required | the app target's Info.plist; `config check --files` checks it is the target's resolved `INFOPLIST_FILE` |
+| `ios.export_compliance` | enum | none | *pin*; `NO` or `YES`: the `ITSAppUsesNonExemptEncryption` answer every app-target configuration must declare (YES also needs `ITSEncryptionExportComplianceCode`). Unset accepts either valid answer |
 | `ios.locale` | str | `en-US` | the listing, What's New and creative locale |
 | `ios.gate_jobs` | array of tables | required | non-empty; each `{ id = "<job id>", uses = "./.github/workflows/<file>.yml" }`, ids unique, `^[a-z0-9][a-z0-9_-]*$`, not a store-release job name, `web`, `android`, `store-release` or `checks`. The app's own test workflows that must pass on a tag before anything after prepare runs; rendered as `if: github.event_name == 'push'` jobs with `contents: read` |
 | `ios.build.developer_dir` | abs path | required | the Xcode to use; must not contain `beta` (any case) |
@@ -78,6 +84,7 @@ python3 -I -u path/to/store-release/run.py --app-root . config check --files
 | `ios.whats_new.heading` | str | `What's New` | substring match |
 | `ios.screenshots.sets` | array of tables | none | upload order; each has `display_type` (`APP_IPHONE_67`, `APP_IPAD_PRO_3GEN_129`, `APP_IPHONE_DUO`, `WATCH`), `dir` and `required`. Non-WATCH sets must have `required = true` (a missing or empty folder fails); the WATCH set must have `required = false` (staged only when its folder exists) and come last; display types are unique. Frames are numbered `NN-name.png` |
 | `ios.creative.dir` | path | `store/creative/ios` | `header/` takes one 3840×1646 PNG; `search-results/` one 3:2 PNG or JPEG, 1920–3840 wide; no alpha |
+| `ios.creative.sizes` | table | none | *pin*; `"<slot>/<file>" = <bytes>` for each image the live Asset Library holds (`header/` a `.png`, `search-results/` a `.png`, `.jpg` or `.jpeg`; one per slot). The slots must hold exactly these files at these sizes, and they must pass the image checks |
 | `ios.products.iap_route` | enum | `submission` | *hook*; subscriptions as `subscriptionVersion` draft items, READY_TO_SUBMIT in-app purchases via `POST /inAppPurchaseSubmissions` after the final build recheck. The table itself is what `IOS_SUBMIT_REVIEW` needs |
 | `ios.github_release.title` | template | `iOS {version} (build {build})` | `{version}`; `{build}` is the uploaded build, else the project's `CURRENT_PROJECT_VERSION` |
 | `android.tag_prefix` | str | required | `^([a-z]+-)*v$`; the tag must equal `<prefix><versionName>` |

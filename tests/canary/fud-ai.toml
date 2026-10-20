@@ -1,15 +1,8 @@
 # Advisory expectations for the canary (CI job "canary (fud-ai)") against
 # apoorvdarshan/fud-ai@main. They pin facts about Fud AI's real files that the
-# hermetic tests cannot see.
-
-# The header and search results images the live Asset Library holds (approved and
-# placed on 7.1.2, 2026-10-20). App Store Connect matches them by name and size,
-# so a changed byte count would upload them again.
-creative_dir = "store/creative/ios"
-
-[creative]
-"header/fud-ai-header-orb-horizon.png" = 1763332
-"search-results/fud-ai-search-voice.png" = 2670930
+# hermetic tests cannot see. The export compliance answer and the creative images'
+# names and sizes are pins in Fud AI's config (ios.export_compliance,
+# ios.creative.sizes), which the canary's config check verifies.
 
 # Every committed set staged for upload with Pillow: [frames, width, height].
 # App Store frames are RGB without alpha; the Play frames (1290x2796) are padded to 9:16.
