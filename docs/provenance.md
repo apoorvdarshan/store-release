@@ -1,4 +1,20 @@
-# Provenance
+# Provenance and history
+
+store-release began as the release pipeline of [Fud AI](https://github.com/apoorvdarshan/fud-ai),
+then took over the pipelines of five more apps by the same author, and from v0.3.0 it is set
+up for anyone's apps. This page records where the code came from, what changed on the
+way, and the facts that only matter to those six apps. The user-facing docs describe the
+behaviour; this page is the history behind it.
+
+## Releases
+
+| Version | What it did |
+|---|---|
+| v0.1.0 | Fud AI's release pipeline, moved into a shared repository with its behaviour kept exactly ("Fud AI parity", below) |
+| v0.2.0 | The other five apps' pipelines (Scowld, Verceltics, ABYSM, PCM Notes, Quit All), each kept as it was, as a ported flow ([flows.md](flows.md)) |
+| v0.3.0 | Usable by any developer: the default flow is called `standard`, `run.py init` and [templates](../examples/templates/), private app repositories, generated Info.plists, Store checks for apps without listings or screenshots, and no app's values in shared code |
+
+## Fud AI parity (v0.1.0)
 
 store-release v0.1.0 is Fud AI's release pipeline moved into a shared repository.
 Source: [`apoorvdarshan/fud-ai`](https://github.com/apoorvdarshan/fud-ai) at
@@ -8,7 +24,11 @@ Pillow 13.0.0 bump). Both repositories are MIT-licensed by the same author.
 
 Every behaviour, API call, switch, secret name, tag rule, title and asset name is
 kept. Fud AI's constants became config values ([config.md](config.md)); module
-boundaries are kept 1:1, so the ported tests changed only in imports and fixtures.
+boundaries are kept 1:1, so the ported tests changed only in imports and fixtures. The
+standard flow is that pipeline; until v0.3.0 it was called the `fud-ai` flow, a name
+configs may still use.
+
+## The ported apps (v0.2.0)
 
 v0.2.0 adds the other five apps' pipelines as ported flows ([flows.md](flows.md)), from:
 
@@ -74,7 +94,7 @@ exit codes. The only differences they allow are D1, D7, D12, D14 and D16 below (
 ones visible at the script level), each with its own test
 (`tests/parity/test_parity_allowlist.py`).
 
-## Behaviour deltas from fud-ai
+## Behaviour deltas from Fud AI's own pipeline
 
 Everything not listed here behaves as fud-ai did. The table includes every check
 store-release adds that can stop a run; with Fud AI's current files and variables none
@@ -115,3 +135,39 @@ silent cap at 8 Play frames, the RevenueCat gate's position, the
 `r0adkll/upload-google-play` inputs, release titles and asset names, the export
 options and the double use of `exportArchive`. Per-app differences arrive one app per
 minor release ([roadmap.md](roadmap.md)).
+
+## The per-app plan before the ported flows
+
+Before v0.2.0 moved all five apps at once as ported flows, the plan was one app per
+release, each adding shared config keys. The flows now carry these differences inside
+them; turning them into shared keys is the unification work in the
+[roadmap](roadmap.md). "Apoorv" is the apps' owner.
+
+| Release | App | Config hooks to add | App-side and ruleset items (Apoorv approves the marked ones) | Also handled |
+|---|---|---|---|---|
+| v0.2.0 | Scowld | `ios.listing.source = "files"` (`dir`, `app_info`, `required`, `privacy_choices_url`); `ios.whats_new.source = "files"`; `ios.whats_new.repeat_guard`; the `screenshots.json` manifest layout (or renaming into ordered set folders with unchanged MD5s; needs Apoorv's OK); `ios.screenshots.rgb = "copy-verbatim"`; `ios.screenshots.compare = "size-md5"`; `ios.products.submit = false`, `pending_outside_catalog = "refuse"`; `ios.review.empty_drafts = "fail"`; title placeholder `{tag}`; `ios.github_release.source_archive` (git archive, `.sha256`, cosign, provenance); `github_release.on_existing = "upload-missing"`; the union redactor (UTF-16BE, file names); `ios export-listing` (GET-only) | gate job `tests`; `check_xcresult.py` stays, so `Analyze (python)` is untouched; the cosign identity docs pin `--certificate-github-workflow-repository apoorvdarshan/scowld` | PR-check semantics per part; verification identity pinned to the repository |
+| v0.3.0 | PCM Notes | `ios.build.post_archive` (`check_offline_notes.sh`); `ios.gate_policy = "when-uploading"` (switching to parallel gates needs Apoorv's OK); `ios.products.iap_route = "review-item"`; `required = false` for non-WATCH sets; the late What's New repeat guard; title `{tag}{build_suffix}`; `on_existing = "keep"` | catalog cross-checks become the app's `scripts/ci/check_catalog.py`; its NOTICE is all rights reserved, so the canary never uploads; suggest a `v*` tag ruleset | the review-item route has never run with a pending product: a clean store-plan plus a read-only check that Apple accepts consumables and tips as review items before submitting with pending products; suggest `IOS_PUBLIC_RELEASE=false` for its first shared release (Apoorv's call) |
+| v0.4.0 | ABYSM | per-set `accepted` sizes, including landscape; `ios.strict_app_id`; `ios.review.compare_only_states` (+`IN_REVIEW`); `ios.creative.require_image = false`; `ios.products.catch_up = "refuse"` (catch-up only for products approved before); fuzz targets move in (Atheris) | `scripts/ci/test_test_ios.py` stays in the app; OpenSSF Scorecard fuzzing and Best Practices answers updated truthfully | catch-up of first-time products |
+| v0.5.0 | Quit All | `ios.build.extensions`, `app_groups`, `verify_ipa` (the double export); manifest with `APP_IPHONE_65`; dual compare (committed or staged bytes); multi-locale files without App Info; `ios.whats_new.version_file`; `iap_route = "review-item"`; compare-only states; `require_image = false`; title `{tag} (build {build})` | removing `Analyze (python)` from its ruleset only if no Python remains, with the unattributed-changes approval set explicitly (Apoorv's approval), or keep a real Python file | its What's New PR semantics (`version_file`) |
+| v0.6.0 | Verceltics iOS | `ios.whats_new.source = "release-notes"` (`plain_text`); listing files plus App Info, failing when it differs and nothing is editable; `fit = false`; `ios.uses_non_exempt_encryption` in config, checked at submission; `on_existing = "fail"`; gate job `catalog` through a `ci.yml` input, on dispatches too | `scripts/test.sh` discovery; keep the coverage of the required `catalog` check (Apoorv's approval) | |
+| v0.7.0 | Verceltics Android | `android.build.signing = "gradle-properties"` (properties, alias); `sdk_packages`; `production_access = false` note; release-notes What's New; files listing; `pad_to_9_16 = false` with RGB flattening; asset name with `{version_code}`; keep its Play-state re-run model unless Apoorv approves Fud AI's | a first real internal-track test before any production switch | |
+
+## Facts that only concern the six apps
+
+- **Their shared CI signing identity.** `IOS_DEV_SIGNING_P12_BASE64` in the six apps'
+  repositories holds one Apple Development identity: certificate "Apple Development:
+  Created via API", ID `NVNGDQGCKK`, expiring 2027-10-14. It signs every one of their
+  archives (App Store signing happens at export with Apple's cloud-managed distribution
+  certificate), its private key exists only in those repositories' `IOS_DEV_SIGNING_*`
+  secrets, and it was copied between them with the sealing procedure in
+  [secrets.md](secrets.md#sharing-one-development-identity-across-your-apps). When it
+  expires or is revoked: revoke it (App Store Connect API, `DELETE /v1/certificates/<id>`),
+  create a new one (`certificateType: DEVELOPMENT`) and replace both secrets in every
+  repository that has them. Sesslet is the one other app that uses it.
+- **Signatures made before the move.** Releases an app made before it moved to
+  store-release were signed by the app's own workflow, and that app's `store/README.md`
+  keeps their identity. Scowld's source archives up to v2.1.0 were signed by Scowld's
+  `.github/workflows/ios-release.yml`; from store-release v0.2.0 on, by store-release's
+  `ios-source-archive.yml` called from `apoorvdarshan/scowld`.
+- **The canary.** store-release's CI runs the Store checks against `apoorvdarshan/fud-ai`'s
+  `main` (`canary (fud-ai)`, advisory) with the expectations in `tests/canary/fud-ai.toml`.

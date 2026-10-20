@@ -193,6 +193,18 @@ class PullRequestCheckTests(unittest.TestCase):
                 with self.subTest(file=name, path=path, removed=True):
                     self.assertTrue(callers.differences(removed, expected))
 
+    def test_a_reworded_run_workflow_hint_still_passes(self) -> None:
+        # Input descriptions are the Run workflow form's help text: like comments, a new wording in a
+        # later release never fails an app's committed callers (v0.2.0 rendered "e.g. 7.2").
+        ios = self.workflows / "ios-release.yml"
+        original = ios.read_text()
+        self.assertIn("(e.g. 1.2)", original)
+        ios.write_text(original.replace("(e.g. 1.2)", "(e.g. 7.2)"))
+        self.check()
+        ios.write_text(original.replace('        required: false\n        default: ""\n',
+                                        '        required: true\n        default: ""\n', 1))
+        self.fails("marketing_version.required")
+
     def test_textual_changes_fail_the_whole_check(self) -> None:
         ios = self.workflows / "ios-release.yml"
         original = ios.read_text()

@@ -797,6 +797,9 @@ def _android(table: _Table, slug: str) -> Android:
                        default_dir="store/metadata/play")
     whats_new = _whats_new(table.table("whats_new"), "PLAYSTORE.md",
                            sources=("release-notes",) if ported else ("markdown",))
+    if whats_new is not None and whats_new.version_file:
+        raise ConfigError("android.whats_new.version_file: only the quit-all flow (iOS) checks a What's New "
+                          "version file")
     screenshots_table = table.table("screenshots")
     screenshots_dir = None
     pad = not ported

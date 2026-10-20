@@ -4,8 +4,13 @@ The flow's switches are resolved as a tag run of this version would resolve them
 same repository variables), then the flow's own read-only checks run against the live
 store with a client that refuses every write before it is sent:
 
-  iOS      the App Store version (would IOS_CREATE_VERSION create it?) and the flow's
-           read-only preflight with the switches a tag run would have
+  iOS      the catalog and the local files a tag run's prepare checks, the App Store version
+           (would IOS_CREATE_VERSION create it?), and the flow's read-only preflight with the
+           switches a tag run would have. When the version does not exist yet and
+           IOS_CREATE_VERSION would create it, the preflight cannot run (it needs the
+           version), so every check that does not need it runs instead: What's New against
+           the live version, the products that would have to go to review, the review drafts.
+           What only the created version can show is listed as not checked.
   Android  the flow's read-only Play checks a tag run makes before building
            (check-version-code; with a track selected, play-state)
 
@@ -84,12 +89,29 @@ def run_step(label: str, fn) -> tuple[bool, str]:
         except ReadOnlyViolation as exc:
             print(f"error: {exc}")
             ok = False
+        except (OSError, ValueError) as exc:
+            # A file the step reads is missing or malformed: the tag run's own step would stop on it too.
+            print(f"error: {exc}")
+            ok = False
     text = out.getvalue().strip()
     print(f"== {label}: {'passed' if ok else 'a tag run would fail here'}")
     if text:
         print(text)
-    last = next((line for line in reversed(text.splitlines()) if line.startswith("error:")), "")
-    return ok, last.removeprefix("error: ") or f"{label} failed"
+    return ok, error_message(text) or f"{label} failed"
+
+
+def error_message(text: str) -> str:
+    """The last `error: ...` line of a step's output with the indented lines that continue it."""
+    lines = text.splitlines()
+    starts = [i for i, line in enumerate(lines) if line.startswith("error:")]
+    if not starts:
+        return ""
+    message = [lines[starts[-1]].removeprefix("error: ").strip()]
+    for line in lines[starts[-1] + 1:]:
+        if not line.startswith((" ", "\t")) or not line.strip():
+            break
+        message.append(line.strip())
+    return " ".join(message)
 
 
 def finish(flow: str, platform: str, problems: list[str], lines: list[str], work_dir: Path,
@@ -118,6 +140,89 @@ SWITCH_ENV = {"listing": "UPLOAD_LISTING", "whats_new": "UPLOAD_WHATS_NEW", "scr
               "creative": "UPLOAD_CREATIVE_ASSETS", "submit": "SUBMIT_IOS_REVIEW", "public_release": "PUBLIC_RELEASE"}
 
 
+def offline_checks(config: Any, flow: str, resolved: Mapping[str, Any]) -> list[tuple[str, Any]]:
+    """What a tag run's prepare checks before it reads App Store Connect: the flow's catalog check (as on a
+    tag run) and, with an App Store Connect switch on, the local files the enabled switches use."""
+    checks: list[tuple[str, Any]] = []
+    if config.catalog is not None:
+        checks.append(("the catalog check a tag run's prepare makes (offline)",
+                       lambda: commands.catalog_check(config, ["--platform", "ios", "--event", "push"])))
+    if resolved.get("asc"):
+        checks.append(("the local files the enabled switches upload (offline)",
+                       lambda: commands.check_inputs(config, flow, [])))
+    return checks
+
+
+def whats_new_checks(flow: str, client: Any, app_id: str, version_id: str) -> list[tuple[str, Any]]:
+    """The flow's own check that What's New is not the live version's text, for every locale. version_id is
+    the App Store version the release edits ("" while it does not exist yet). Scowld's preflight already
+    makes this check for an existing version; PCM Notes' store step makes it, its preflight does not."""
+    asc = commands.module(flow, "asc_release")
+    if flow == "scowld":
+        def scowld() -> None:
+            plan = asc.validate_local_inputs(upload_listing=False, upload_whats_new=True, upload_screenshots=False,
+                                             metadata_dir=asc.METADATA_DIR, root=asc.ROOT)
+            for locale, entry in plan.items():
+                asc.refuse_stale_whats_new(client, app_id, version_id, locale, entry["whats_new"])
+            print(f"What's New differs from the live version's in {', '.join(plan) or 'no locale'}")
+        return [("What's New is not the live version's (every locale)", scowld)]
+    if flow == "pcm-notes":
+        def pcm_notes() -> None:
+            metadata_dir = asc.ROOT / "store" / "metadata"
+            locales = asc.listing_locales(metadata_dir)
+            for locale in locales:
+                text = asc.read_text(metadata_dir / "ios" / locale / asc.WHATS_NEW_FIELD[1])
+                if text:
+                    asc.check_whats_new_is_new(client, app_id=app_id, version_id=version_id, locale=locale, text=text)
+            print(f"What's New is not the live version's in {', '.join(locales) or 'no locale'}")
+        return [("What's New is not the live version's (every locale)", pcm_notes)]
+    return []
+
+
+def review_checks(flow: str, client: Any, app_id: str) -> list[tuple[str, Any]]:
+    """With IOS_SUBMIT_REVIEW on: the checks of the products and the review drafts that need no version."""
+    asc = commands.module(flow, "asc_release")
+    checks: list[tuple[str, Any]] = []
+    if flow == "scowld":
+        checks.append(("no in-app product would have to go to review with the version",
+                       lambda: asc.refuse_pending_in_app_products(client, app_id)))
+    if flow == "abysm":
+        def abysm() -> None:
+            items, failures = asc.catalog_review_items(client, app_id, asc.intended_product_ids())
+            if failures:
+                asc.fail("these required products would not be added to App Review: " + "; ".join(failures))
+            print(f"catalog products a tag run would add to the review draft: {len(items)}")
+        checks.append(("the catalog products a tag run would add to the review draft", abysm))
+
+    def drafts() -> None:
+        draft = asc.find_draft_submission(client, app_id)
+        print(f"the version would go out in draft review submission {draft}" if draft
+              else "no draft review submission yet: the tag run creates one when it submits")
+    checks.append(("the app's draft review submissions", drafts))
+    return checks
+
+
+# What the flow's preflight checks only on the version itself, by the switches that need it.
+DEFERRED = (
+    ("asc", "the version's state"),
+    ("listing", "its localizations and which listing fields would change"),
+    ("whats_new", "its What's New localizations"),
+    ("screenshots", "its screenshot sets and whether they would change"),
+    ("creative", "where the header and search results images would be placed"),
+    ("submit", "the version's place in the review draft"),
+)
+# The flows whose store step attaches the catalog products to the version's draft as it writes, so a
+# plan can only check them once the version exists (and even then only the store step does).
+PRODUCTS_IN_STORE_STEP = ("verceltics", "pcm-notes", "quit-all")
+
+
+def deferred(flow: str, resolved: Mapping[str, Any]) -> list[str]:
+    items = [label for name, label in DEFERRED if resolved.get(name)]
+    if resolved.get("submit") and flow in PRODUCTS_IN_STORE_STEP:
+        items.append("the catalog products that go to review with it")
+    return items
+
+
 def ios_plan(app: Any, *, version: str, work_dir: Path, environ: Mapping[str, str] | None = None) -> int:
     env = dict(os.environ if environ is None else environ)
     config = app.config
@@ -134,30 +239,54 @@ def ios_plan(app: Any, *, version: str, work_dir: Path, environ: Mapping[str, st
     if not resolved.get("asc") and not resolved.get("create_version"):
         lines.append("App Store Connect: a tag run would change nothing")
         return finish(flow, "iOS", problems, lines, work_dir, env)
+    switches = {variable: "true" if resolved.get(name) else "false" for name, variable in SWITCH_ENV.items()}
+    tag_env = {**switches, "GITHUB_REF_NAME": tag, "MARKETING_VERSION": version,
+               "GATES_ASC": "true" if resolved.get("asc") else "false"}
+
+    def check(label: str, fn) -> bool:
+        with commands.environment(tag_env), read_only(flow):
+            ok, problem = run_step(label, fn)
+        if not ok:
+            problems.append(problem)
+        return ok
+
+    offline_ok = all([check(label, fn) for label, fn in offline_checks(config, flow, resolved)])
     asc = commands.module(flow, "asc_release")
     with read_only(flow):
         client = asc.client_from_environment()
         app_id = asc.find_app(client, config.ios.bundle_id)
         versions = getattr(asc, VERSION_LISTS[flow])(client, app_id)
-    exists = any((row.get("attributes") or {}).get("versionString") == version for row in versions)
-    if not exists:
-        if resolved.get("create_version"):
-            lines.append(f"App Store version {version} is missing: IOS_CREATE_VERSION would create it, and the "
-                         "preflight runs against it after that")
+    match = next((row for row in versions if (row.get("attributes") or {}).get("versionString") == version), None)
+    if match is None:
+        if not resolved.get("create_version"):
+            problems.append(f"App Store version {version} does not exist and IOS_CREATE_VERSION is off")
             return finish(flow, "iOS", problems, lines, work_dir, env)
-        problems.append(f"App Store version {version} does not exist and IOS_CREATE_VERSION is off")
+        lines.append(f"App Store version {version} is missing: IOS_CREATE_VERSION would create it first")
+        if not resolved.get("asc"):
+            return finish(flow, "iOS", problems, lines, work_dir, env)
+        # The preflight needs the version; run every check that does not.
+        checks = whats_new_checks(flow, client, app_id, "") if resolved.get("whats_new") else []
+        if resolved.get("submit"):
+            checks += review_checks(flow, client, app_id)
+        passed = [check(label, fn) for label, fn in checks]
+        if offline_ok and all(passed):
+            lines.append("every check that needs no App Store version passed")
+        waiting = deferred(flow, resolved)
+        note = (f"not checked until the tag run creates App Store version {version}: " + "; ".join(waiting)
+                + " (the tag run checks them once it has created the version, before anything is uploaded)")
+        lines.append(note)
+        print(f"::notice title=store-plan::{note}")
         return finish(flow, "iOS", problems, lines, work_dir, env)
     lines.append(f"App Store version {version} exists")
     if not resolved.get("asc"):
         return finish(flow, "iOS", problems, lines, work_dir, env)
-    switches = {variable: "true" if resolved.get(name) else "false" for name, variable in SWITCH_ENV.items()}
-    with commands.environment({**switches, "GITHUB_REF_NAME": tag}), read_only(flow):
-        ok, problem = run_step("the preflight a tag run would make (read-only)",
-                               lambda: commands.preflight(config, flow, ["--version", version]))
-    if not ok:
-        problems.append(problem)
-    else:
+    if check("the preflight a tag run would make (read-only)",
+             lambda: commands.preflight(config, flow, ["--version", version])):
         lines.append("the preflight passed: the version can take every enabled operation")
+    # A check the flow's store step makes but its preflight does not.
+    if flow == "pcm-notes" and resolved.get("whats_new"):
+        for label, fn in whats_new_checks(flow, client, app_id, match.get("id") or ""):
+            check(label, fn)
     return finish(flow, "iOS", problems, lines, work_dir, env)
 
 

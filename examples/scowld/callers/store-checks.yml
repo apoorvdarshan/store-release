@@ -31,11 +31,11 @@ concurrency:
 
 jobs:
   checks:
-    uses: apoorvdarshan/store-release/.github/workflows/checks.yml@0000000000000000000000000000000000000000 # v0.2.0
+    uses: apoorvdarshan/store-release/.github/workflows/checks.yml@0000000000000000000000000000000000000000 # v0.3.0
     permissions:
       contents: read
 
-  # One stable check name across store-release versions (not a required check in v0.2.0).
+  # One stable check name across store-release versions (not a required check in v0.3.0).
   store-release:
     needs: checks
     if: ${{ always() }}

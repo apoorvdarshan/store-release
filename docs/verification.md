@@ -1,17 +1,60 @@
 # Verifying downloads
 
-## Android release files
+Three kinds of files are signed: store-release's own release assets, the Android files an
+app's GitHub Release carries, and, when an app turns it on, the source archive of an iOS
+release. All of them are signed keylessly with [Sigstore](https://www.sigstore.dev/)
+(`cosign`) and carry a SLSA build provenance attestation that `gh attestation verify`
+checks.
+
+## store-release's own releases
+
+Each `vX.Y.Z` release attaches four files, made by store-release's
+[`release.yml`](../.github/workflows/release.yml) from the tagged commit:
+
+| File | What it is |
+|---|---|
+| `store-release-X.Y.Z-source.tar.gz` | `git archive` of the tagged commit (prefix `store-release-X.Y.Z/`) |
+| `store-release-X.Y.Z-source.tar.gz.sha256` | its SHA-256 |
+| `store-release-X.Y.Z-source.tar.gz.sigstore.json` | the cosign keyless signature bundle |
+| `store-release-X.Y.Z-source.tar.gz.intoto.jsonl` | the SLSA build provenance attestation (also stored by GitHub) |
+
+```bash
+v=0.3.0   # the release to check
+gh release download "v$v" --repo apoorvdarshan/store-release
+sha256sum -c "store-release-$v-source.tar.gz.sha256"
+cosign verify-blob "store-release-$v-source.tar.gz" \
+  --bundle "store-release-$v-source.tar.gz.sigstore.json" \
+  --certificate-identity 'https://github.com/apoorvdarshan/store-release/.github/workflows/release.yml@refs/heads/main' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+gh attestation verify "store-release-$v-source.tar.gz" --repo apoorvdarshan/store-release \
+  --signer-workflow apoorvdarshan/store-release/.github/workflows/release.yml
+# Offline, with the attached bundle instead of GitHub's attestation store:
+gh attestation verify "store-release-$v-source.tar.gz" --repo apoorvdarshan/store-release \
+  --bundle "store-release-$v-source.tar.gz.intoto.jsonl"
+```
+
+On macOS use `shasum -a 256 -c` for the checksum. Without cosign, the Python
+[sigstore](https://pypi.org/project/sigstore/) client checks the same bundle:
+`python -m sigstore verify identity --bundle <bundle> --cert-identity <identity above>
+--cert-oidc-issuer https://token.actions.githubusercontent.com <archive>`.
+
+The archive is exactly the tagged commit's tree, so a clone rebuilds it: the tar inside is
+identical whatever git version makes it (compare `gzip -dc store-release-$v-source.tar.gz |
+sha256sum` with `git archive --format=tar --prefix=store-release-$v/ v$v | sha256sum`). The
+releases are immutable, and the tag is the commit apps pin
+([release-process.md](release-process.md)).
+
+## An app's Android release files
 
 An Android tag run signs the AAB and APK it attaches to the app's GitHub Release with
-Sigstore (keyless, `*.sigstore.json` next to each file) and records build provenance
-(`actions/attest-build-provenance`). The signing job is store-release's
-`android-publish.yml`, so the certificate identity is
+Sigstore (`*.sigstore.json` next to each file) and records build provenance. The signing
+job is store-release's `android-publish.yml`, so the certificate identity is
 `https://github.com/apoorvdarshan/store-release/.github/workflows/android-publish.yml@<sha>`
 for **every** app that uses store-release. Always pin the app's repository as well;
 otherwise a file signed by another app's run would verify too.
 
 ```bash
-# <asset> is the app's asset name, for example fudai-v7.2.apk
+# <asset> is the app's asset name (android.github_release.asset_name), e.g. my-app-v1.2.apk
 cosign verify-blob <asset> --bundle <asset>.sigstore.json \
   --certificate-identity-regexp '^https://github\.com/apoorvdarshan/store-release/\.github/workflows/android-publish\.yml@[0-9a-f]{40}$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
@@ -21,64 +64,59 @@ gh attestation verify <asset> --repo <owner>/<app repository> \
   --signer-workflow apoorvdarshan/store-release/.github/workflows/android-publish.yml
 ```
 
-The `<sha>` in the identity is the store-release commit the app pinned; the app's
-caller workflow shows it (`# vX.Y.Z` names the version). Releases an app made before
-it moved to store-release were signed by the app's own workflow; that app's
-`store/README.md` keeps their identity.
+The `<sha>` in the identity is the store-release commit the app pinned; the app's caller
+workflow shows it (`# vX.Y.Z` names the version). The rendered `android-release.yml` carries
+these commands with the app's own names in its header.
 
 Both files are also checked before they are signed: the package, versionName and
 versionCode must match the tag, and the pinned upload certificate
-(`android.upload_cert_sha256`) must be the only signer, with every AAB entry covered
-by the signature.
+(`android.upload_cert_sha256`) must be the only signer, with every AAB entry covered by the
+signature.
 
-## iOS
+## An app's iOS release
 
 The iOS GitHub Release carries the release notes only; the binary goes to App Store
-Connect and is distributed by Apple. Before upload, every app and extension bundle in
-the archive is checked for the bundle id, version and build number, and the archived
+Connect and Apple distributes it. Before upload, every app and extension bundle in the
+archive is checked for the bundle id, version and build number, and the archived
 Info.plist for its export compliance answer.
 
-### Scowld's source archive
+### Source archives (`ios.github_release.source_archive`)
 
-With `ios.github_release.source_archive` the iOS GitHub Release also carries
-`<slug>-<version>-source.tar.gz`, its `.sha256` and a cosign bundle
-(`.sigstore.json`), made by store-release's `ios-source-archive.yml` from the tagged
-commit. From store-release v0.2.0 on, the signing identity is that reusable workflow,
-called from the app's repository:
+With `ios.github_release.source_archive = true` the iOS GitHub Release also carries
+`<slug>-<version>-source.tar.gz`, its `.sha256` and a cosign bundle (`.sigstore.json`),
+made by store-release's `ios-source-archive.yml` from the tagged commit. The signing
+identity is that reusable workflow, called from the app's repository:
 
 ```bash
-sha256sum -c scowld-X.Y.Z-source.tar.gz.sha256
-cosign verify-blob scowld-X.Y.Z-source.tar.gz \
-  --bundle scowld-X.Y.Z-source.tar.gz.sigstore.json \
+sha256sum -c <slug>-X.Y.Z-source.tar.gz.sha256
+cosign verify-blob <slug>-X.Y.Z-source.tar.gz \
+  --bundle <slug>-X.Y.Z-source.tar.gz.sigstore.json \
   --certificate-identity-regexp '^https://github\.com/apoorvdarshan/store-release/\.github/workflows/ios-source-archive\.yml@[0-9a-f]{40}$' \
-  --certificate-github-workflow-repository apoorvdarshan/scowld \
+  --certificate-github-workflow-repository <owner>/<app repository> \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
-gh attestation verify scowld-X.Y.Z-source.tar.gz --repo apoorvdarshan/scowld
+gh attestation verify <slug>-X.Y.Z-source.tar.gz --repo <owner>/<app repository>
 ```
 
-Releases made by Scowld's own pipeline (v2.1.0 and earlier) keep their old identity,
-Scowld's `.github/workflows/ios-release.yml`.
+## The pin an app runs
 
-## store-release itself
-
-- Apps pin store-release by full commit SHA with a `# vX.Y.Z` comment. In Store
-  checks, `pins check` and `caller check --pr` fail unless every pin is the same
-  commit, its comment names the version that runs, and the `vX.Y.Z` tag points at that
-  commit, so a pin to an untagged `main` commit with a plausible comment fails. In
-  release runs, `caller check --runtime` only warns about the tag.
-- Those checks run inside the code the app pinned, so they cannot catch a hostile pin:
-  a commit pushed to a fork of store-release also resolves through `uses:` by SHA, and
-  its code could skip them. Catch that outside the pinned code: merge only pin bumps
-  that Dependabot opened (it resolves `vX.Y.Z` in apoorvdarshan/store-release itself),
-  or check the pin in the app's own CI, for example that
-  `git ls-remote https://github.com/apoorvdarshan/store-release refs/tags/vX.Y.Z`
-  prints the pinned SHA, or run zizmor's `impostor-commit` audit.
-- Release tags `vX.Y.Z` come from `release.yml`, after every required check passed on
-  that commit, and never move: releases are immutable (the tag is locked as the
-  release is published), and the "Release tags" ruleset (created right after the
-  first tag, [release-process.md](release-process.md)) blocks tag updates and
-  deletion. That only `release.yml` creates them is a convention: the ruleset does not
-  block creating a tag, so anyone with write access could push one.
-- Every job checks out store-release at `job.workflow_sha` and `tool check` confirms
-  the checkout is that commit, so the workflow YAML and the Python it runs are the
-  pinned commit's.
+- Apps pin store-release by full commit SHA with a `# vX.Y.Z` comment. In Store checks,
+  `pins check` and `caller check --pr` fail unless every pin is the same commit, its
+  comment names the version that runs, and the `vX.Y.Z` tag points at that commit, so a pin
+  to an untagged `main` commit with a plausible comment fails. In release runs,
+  `caller check --runtime` only warns about the tag.
+- Those checks run inside the code the app pinned, so they cannot catch a hostile pin: a
+  commit pushed to a fork of store-release also resolves through `uses:` by SHA, and its
+  code could skip them. Catch that outside the pinned code: merge only pin bumps that
+  Dependabot opened (it resolves `vX.Y.Z` in apoorvdarshan/store-release itself), or check
+  the pin in the app's own CI, for example that
+  `git ls-remote https://github.com/apoorvdarshan/store-release refs/tags/vX.Y.Z` prints
+  the pinned SHA, or run zizmor's `impostor-commit` audit.
+- Release tags `vX.Y.Z` come from `release.yml`, after every required check passed on that
+  commit, and never move: releases are immutable (the tag is locked as the release is
+  published), and the "Release tags" ruleset blocks tag updates and deletion
+  ([release-process.md](release-process.md)). That only `release.yml` creates them is a
+  convention: the ruleset does not block creating a tag, so anyone with write access could
+  push one.
+- Every job checks out store-release at `job.workflow_sha` and `tool check` confirms the
+  checkout is that commit, so the workflow YAML and the Python it runs are the pinned
+  commit's.

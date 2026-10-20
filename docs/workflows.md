@@ -1,9 +1,9 @@
 # Reusable workflows
 
 Eleven single-job reusable workflows (`on: workflow_call`). An app calls them from three
-thin caller workflows that `run.py callers render` writes from its config
-([Fud AI's](../examples/fud-ai/callers/)); each caller job calls exactly one of them,
-so **Re-run failed jobs** works per stage ([rerun.md](rerun.md)).
+thin caller workflows that `run.py init` or `run.py callers render` writes from its config
+([templates](../examples/templates/)); each caller job calls exactly one of them, so
+**Re-run failed jobs** works per stage ([rerun.md](rerun.md)).
 
 ```
 iOS Release (.github/workflows/ios-release.yml in the app)
@@ -22,25 +22,23 @@ Store checks (.github/workflows/store-checks.yml; PRs, main pushes, Run workflow
   checks ─► store-release (a plain aggregator job with a stable name)
 ```
 
-The five ported flows ([flows.md](flows.md)) use the same workflows and callers, with
-three differences the config selects:
+Three config keys change the shape of the callers:
 
 - `ios.gate_policy`: `parallel` (gates next to prepare, as above), `after-prepare`
-  (gates need prepare; Quit All) or `when-uploading` (gates need prepare and run only
-  on a tag run that uploads a build; build waits for them only then; PCM Notes).
-- `ios.github_release.source_archive` (Scowld): a `source-archive` job between
-  app-store-connect and github-release calls `ios-source-archive.yml`, the only job
-  with `id-token: write` and `attestations: write`: a `git archive` of the tagged
-  commit, its `.sha256`, a cosign keyless bundle and a build-provenance attestation,
-  which github-release attaches.
-- `android.build.signing = "gradle-properties"` (Verceltics): the caller passes
-  `keystore_only: true` and only the two `ANDROID_KEYSTORE_*` secrets; the keystore
-  and a password file are given to Gradle as `-P` properties.
+  (gates need prepare) or `when-uploading` (gates need prepare and run only on a tag run
+  that uploads a build; build waits for them only then).
+- `ios.github_release.source_archive`: a `source-archive` job between app-store-connect
+  and github-release calls `ios-source-archive.yml`, the only job with `id-token: write`
+  and `attestations: write`: a `git archive` of the tagged commit, its `.sha256`, a cosign
+  keyless bundle and a build-provenance attestation, which github-release attaches.
+- `android.build.signing = "gradle-properties"` (a ported flow): the caller passes
+  `keystore_only: true` and only the two `ANDROID_KEYSTORE_*` secrets; the keystore and a
+  password file are given to Gradle as `-P` properties.
 
-Prepare also runs `ios.prepare.checks` (Verceltics' offline repository tests) and a
-flow's catalog check, build runs `ios.build.post_archive` hooks after the archive
-check and, with `ios.build.verify_ipa`, exports once to verify the signed IPA's
-bundles before validating.
+`ios.build.runner` passes the build job's runner label. Prepare also runs
+`ios.prepare.checks` and a ported flow's catalog check, build runs `ios.build.post_archive`
+hooks after the archive check and, with `ios.build.verify_ipa`, exports once to verify the
+signed IPA's bundles before validating.
 
 Merging never starts a release. Only a tag push releases; a dispatch only validates
 and plans.
@@ -157,7 +155,8 @@ name would satisfy it by accident); the caller check refuses them.
   of caller text. It refuses a `SHA` that the `vX.Y.Z` tag does not point at;
   `--allow-untagged` is for store-release's own CI, which renders its current commit.
 - `caller check --pr` (Store checks) compares each caller with the rendered one as
-  YAML (comments do not count) and reports the differing keys; every store-release
+  YAML (comments and the Run workflow inputs' descriptions do not count) and reports the
+  differing keys; every store-release
   reference must end in `@<sha> # v<version>`, and store-release's `v<version>` tag
   must point at `<sha>`.
 - `pins check` (Store checks): every store-release reference in every app workflow
@@ -168,9 +167,9 @@ name would satisfy it by accident); the caller check refuses them.
   exactly `group: <platform>-release-${{ github.event_name == 'push' && 'release' ||
   github.run_id }}`, `cancel-in-progress: false`, `queue: max`. A `v<version>` tag
   that points elsewhere, is missing or cannot be read is only a warning here.
-- The tag checks read `GET /repos/apoorvdarshan/store-release/git/ref/tags/v<version>`
-  (annotated tags are followed to their commit) with the job's read-only
-  `GITHUB_TOKEN`. In Store checks a failed read fails the check; re-run it. They run
+- The tag checks read `GET /repos/<store-release repository>/git/ref/tags/v<version>`
+  (`job.workflow_repository`; annotated tags are followed to their commit) with the job's
+  read-only `GITHUB_TOKEN`. In Store checks a failed read fails the check; re-run it. They run
   inside the pinned code, so they catch mistakes, not a hostile pin
   ([verification.md](verification.md#store-release-itself)).
 - `yanked check`: a pinned version listed in [yanked.md](yanked.md) fails Store

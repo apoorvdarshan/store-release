@@ -1,5 +1,9 @@
 # Releasing store-release
 
+How store-release itself is versioned, released and verified, and how apps receive a new
+release. The commands name this repository, `apoorvdarshan/store-release`; a fork uses its
+own.
+
 ## Versions
 
 - SemVer tags `vX.Y.Z`, created by the **Release** workflow (a convention: nothing
@@ -56,11 +60,53 @@ with Impact `validation`.
       concluded `success` (still running counts as a failure: wait, then dispatch
       again). Only check runs that GitHub Actions created in the commit's `ci.yml`
       and `codeql.yml` runs count. The canary is advisory and not checked.
-3. Only then does one call (`gh release create vX.Y.Z --target <commit>`) create the
-   tag on that commit and publish the GitHub Release, marked Latest. The step then
-   confirms the tag points at the commit.
+3. Then the run builds the release assets from that commit (below) and one call
+   (`gh release create vX.Y.Z --target <commit>`) creates the tag on that commit and
+   publishes the GitHub Release with them, marked Latest. gh uploads the assets to a draft
+   and publishes it last (an immutable release takes no assets once published), so the
+   tag exists only once the release is complete. The step then confirms the tag points at
+   the commit.
+4. Verify the result ([below](#verifying-a-release)).
 
-### When the Release run fails
+## Release assets
+
+Every release carries four files, made in the Release run after every precondition held:
+
+| File | Made by |
+|---|---|
+| `store-release-X.Y.Z-source.tar.gz` | `git archive --format=tar.gz --prefix=store-release-X.Y.Z/ <commit>` |
+| `store-release-X.Y.Z-source.tar.gz.sha256` | `sha256sum` of the archive |
+| `store-release-X.Y.Z-source.tar.gz.sigstore.json` | `cosign sign-blob --bundle` (Sigstore keyless; the identity is `release.yml` on `refs/heads/main`) |
+| `store-release-X.Y.Z-source.tar.gz.intoto.jsonl` | `actions/attest-build-provenance` (SLSA build provenance, also stored by GitHub) |
+
+## Verifying a release
+
+After every release, check the tag, the assets and CI on the tagged commit:
+
+```bash
+v=X.Y.Z
+repo=apoorvdarshan/store-release
+sha=$(gh api "repos/$repo/git/ref/tags/v$v" --jq .object.sha)       # the tag (lightweight: the commit)
+gh release view "v$v" --repo "$repo" --json isDraft,isImmutable,assets \
+  --jq '{isDraft, isImmutable, assets: [.assets[].name]}'
+gh api "repos/$repo/releases/latest" --jq .tag_name                 # Latest: v$v
+gh run list --repo "$repo" --commit "$sha" --json name,conclusion   # CI and CodeQL on that commit
+gh release download "v$v" --repo "$repo" --dir "store-release-$v"
+cd "store-release-$v"
+sha256sum -c "store-release-$v-source.tar.gz.sha256"
+gh attestation verify "store-release-$v-source.tar.gz" --repo "$repo" \
+  --signer-workflow "$repo/.github/workflows/release.yml"
+cosign verify-blob "store-release-$v-source.tar.gz" --bundle "store-release-$v-source.tar.gz.sigstore.json" \
+  --certificate-identity "https://github.com/$repo/.github/workflows/release.yml@refs/heads/main" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+The release must be published (not a draft), immutable and Latest, with the four assets;
+the tag must be the commit the Release run was dispatched on, whose `test (stdlib)`,
+`test (strict)`, `test (macos)`, `lint`, `workflows`, `Analyze (python)` and
+`Analyze (actions)` passed. Users verify the same way ([verification.md](verification.md)).
+
+## When the Release run fails
 
 - Before the last step (a precondition failed): nothing was created. Fix the cause
   (or wait for CI), then dispatch again.
@@ -74,6 +120,21 @@ with Impact `validation`.
     release): yank that version ([yanked.md](yanked.md)) and release the next patch.
   - A tag exists without a release: tags never move, so release the next patch, and
     yank the version if anything pinned it.
+  - **A stuck draft:** the run stopped (cancelled, timed out or the runner was lost) after
+    gh created the draft and before it published it. A draft makes no tag, so the version
+    is still free. Check, then delete the draft and dispatch again:
+
+    ```bash
+    gh release list --repo apoorvdarshan/store-release --json tagName,isDraft \
+      --jq '.[] | select(.isDraft) | .tagName'                       # lists vX.Y.Z
+    gh api repos/apoorvdarshan/store-release/git/ref/tags/vX.Y.Z     # 404: no tag yet
+    gh release delete vX.Y.Z --repo apoorvdarshan/store-release --yes
+    gh workflow run release.yml --repo apoorvdarshan/store-release -f version=X.Y.Z
+    ```
+
+    Never publish the stuck draft by hand: its assets may be incomplete, and publishing
+    would create the tag outside the checked run. If the tag lookup does not return 404,
+    the release went through after all; check it as in the bullets above.
 
 ## After the first tag
 

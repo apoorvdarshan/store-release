@@ -1,13 +1,19 @@
 # Release flows
 
-store-release runs six apps' store pipelines. Fud AI's pipeline is store-release's own
-modules (`store_release/ios`, `store_release/android`, the `fud-ai` flow). The other
-five apps had grown their own release scripts, each different in dozens of details
-(which version states allow what, how screenshots are compared and replaced, which
-review draft a version goes into, how products reach App Review, when What's New is
-checked against the live version). v0.2.0 moves every one of them here unchanged, as a
-**ported flow** the app's config selects with `ios.flow` (and, for Verceltics,
-`android.flow`), so that no app's behaviour changes when it moves to store-release.
+**New apps use the standard flow**, the default: store-release's own modules
+(`store_release/ios`, `store_release/android`), configured by
+[`store-release.toml`](config.md). Nothing on this page is needed to set one up.
+
+The **ported flows** exist for five apps that had grown their own release scripts before
+they moved to store-release (Scowld, Verceltics, ABYSM, PCM Notes and Quit All), each
+different in dozens of details: which version states allow what, how screenshots are
+compared and replaced, which review draft a version goes into, how products reach App
+Review, when What's New is checked against the live version. v0.2.0 moved every one of
+them here unchanged, selected with `ios.flow` (and, for Verceltics, `android.flow`), so
+that no app's behaviour changed when it moved. They stay as they are until they are folded
+into the standard flow ([roadmap](roadmap.md)); don't pick one for a new app. The standard
+flow was called `fud-ai` until v0.3.0, after the app it came from
+([provenance](provenance.md)).
 
 ## What a ported flow is
 
@@ -56,11 +62,11 @@ what they do, exactly as that app's own `ios-release.yml` did
 | `ios export-listing ...` | the app's GET-only listing exporter (Scowld, Verceltics, ABYSM, PCM Notes) |
 | `ios pr-checks` (Store checks) | the app's pull request dry-runs with every switch on |
 | `catalog check [--platform] [--event]` | the app's catalog validator, when its prepare ran it (Verceltics and ABYSM on every run, PCM Notes and Quit All on tag runs; every pull request) |
-| `ios plan` / `android plan` (validation dispatches) | the read-only store plan: the switches a tag run would resolve, then the flow's own read-only checks through a client that refuses every write |
+| `ios plan` / `android plan` (validation dispatches) | the read-only store plan: the switches a tag run would resolve, then the flow's own read-only checks through a client that refuses every write. iOS: the catalog check and the local files a tag run's prepare checks, then the preflight; when the App Store version does not exist yet and `IOS_CREATE_VERSION` would create it, every check that needs no version instead (What's New against the live version for Scowld and PCM Notes, Quit All's What's New version file with the local files, Scowld's pending products, ABYSM's catalog review items, the review drafts), and a list of what only the created version can show. PCM Notes' store step's What's New check also runs for an existing version |
 | `android gates`, `check-version-code`, `verify`, `play-state`, `check-tracks`, `play-listing ...`, `pr-checks` | Verceltics' `android_release.py` and `play_listing.py` |
 
-The fud-ai flow keeps its own commands (`version-preflight`, `listing prepare`,
-`whats-new prepare`, `screenshots stage`); a ported flow refuses them, and the fud-ai flow
+The standard flow keeps its own commands (`version-preflight`, `listing prepare`,
+`whats-new prepare`, `screenshots stage`); a ported flow refuses them, and the standard flow
 refuses the ported flows' commands.
 
 ## Per app

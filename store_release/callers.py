@@ -261,7 +261,7 @@ def render_ios(config: Config, *, sha: str, version: str, repository: str = DEFA
         "    inputs:",
         "      marketing_version:",
         "        description: >-",
-        "          Validation only: version to validate as (e.g. 7.2). Empty = the project",
+        "          Validation only: version to validate as (e.g. 1.2). Empty = the project",
         "          version. Apple rejects versions already approved, so use the next one.",
         "        required: false",
         '        default: ""',
@@ -697,6 +697,19 @@ def _normalize(value: Any) -> Any:
     return value
 
 
+def _without_input_descriptions(document: Any) -> Any:
+    """The caller without its Run workflow input descriptions: help text in the form, which (like the
+    comments) changes nothing a run does, so a reworded hint never fails an app's pinned callers."""
+    trigger = document.get("on") if isinstance(document, dict) else None
+    dispatch = trigger.get("workflow_dispatch") if isinstance(trigger, dict) else None
+    inputs = dispatch.get("inputs") if isinstance(dispatch, dict) else None
+    if isinstance(inputs, dict):
+        for spec in inputs.values():
+            if isinstance(spec, dict):
+                spec.pop("description", None)
+    return document
+
+
 def differences(found: Any, expected: Any, path: str = "") -> list[str]:
     if isinstance(found, dict) and isinstance(expected, dict):
         result = []
@@ -742,11 +755,11 @@ def pr_check(config: Config, app_root: Path, *, environ: dict[str, str] | None =
         expected_text = render(config, platform, sha=sha, version=__version__, repository=repository,
                                app_repository=env.get("GITHUB_REPOSITORY", ""), config_path=config_path)
         try:
-            found = _normalize(yaml.safe_load(text))
+            found = _without_input_descriptions(_normalize(yaml.safe_load(text)))
         except yaml.YAMLError as exc:
             problems.append(f"{name}: not valid YAML ({exc})")
             continue
-        expected = _normalize(yaml.safe_load(expected_text))
+        expected = _without_input_descriptions(_normalize(yaml.safe_load(expected_text)))
         for job in _job_names(found):
             if job in FORBIDDEN_JOB_NAMES:
                 problems.append(f"{name}: a job named {job!r} would satisfy the required '{job}' check by accident")

@@ -8,7 +8,15 @@ or `config-breaking`.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-21
+
 Impact: release-path
+
+store-release for any developer's apps: `run.py init` and templates set up a new app,
+private repositories and generated Info.plists work, Store checks pass for apps without
+listings or screenshots, the docs are written for anyone (and tested against the code),
+and no app's values are left in the shared code. The six apps that use it keep their
+behaviour, configs and callers.
 
 ### Added
 
@@ -21,6 +29,21 @@ Impact: release-path
   for placeholder values; a test and `scripts/render_examples.py --check` keep them equal.
 - `ios.build.runner` (optional): the build job's runner label, passed to `ios-build.yml`
   only when set, so every existing caller renders as before.
+- Docs for any developer: a README with the features, a quickstart (config, callers,
+  secrets, switches, validation, tags, Dependabot), release verification and the apps
+  that use store-release; a complete config reference (every key with its type, default,
+  example and meaning); how to get each secret; the switches with their defaults; a
+  troubleshooting and FAQ page; the release assets, their verification and the
+  stuck-draft recovery in [release-process.md](docs/release-process.md); and CONTRIBUTING
+  for outside contributors. The history of the code, including the Fud AI parity notes,
+  the six apps' shared CI signing identity and the per-app plan, moved to
+  [provenance.md](docs/provenance.md).
+- `tests/workflows/test_docs.py` keeps the docs from drifting: it fails when the parser
+  reads a config key `config.md` does not list (or `config.md` lists one it does not read),
+  when a config row lacks a type, default or TOML example, when a switch's documented
+  default is wrong, when `secrets.md` and a reusable workflow's `secrets:` disagree, when
+  the troubleshooting page quotes a message the code no longer prints, and when a
+  user-facing page promises Fud AI parity.
 
 ### Changed
 
@@ -38,15 +61,65 @@ Impact: release-path
   passes. `listing prepare`, `whats-new prepare` and `screenshots stage` with
   `--platform all` skip a platform without its table; an explicit platform is unchanged.
   An app with every table (Fud AI) runs exactly the same steps.
+- `android.whats_new.version_file` is refused (only the quit-all flow, on iOS, reads a
+  What's New version file); the verceltics flow accepted it and ignored it.
 - No app's identity appears outside `store_release/flows/`: a test now checks the six
   apps' names, bundle ids, App Store Connect ids, team, packages, upload certificates and
   product prefixes, and any account or e-mail address, in the package, the reusable
   workflows and job-setup. `canary --expect` is required (store-release's CI passes it).
 
+### Fixed
+
+- The ported flows' iOS store plan reported CLEAN when the App Store version did not exist
+  yet and `IOS_CREATE_VERSION` would create it, without running any later check: a tag
+  whose What's New was still the live version's would create the version and then fail.
+  The plan now runs every check that needs no version, as a tag run makes them: the
+  catalog check and the local files (including Quit All's What's New version file), What's
+  New against the live version (Scowld, PCM Notes), pending in-app products (Scowld), the
+  catalog review items (ABYSM) and the review drafts. It lists, in a line and a notice,
+  what only the created version can show. For an existing version it also runs the catalog
+  and local-file checks before the preflight, and PCM Notes' store-step What's New check.
+- The iOS caller's `marketing_version` hint says `e.g. 1.2` instead of an app's version.
+  `caller check --pr` ignores the Run workflow inputs' descriptions, like comments, so
+  callers rendered by v0.2.0 keep passing.
+
+### Security
+
+- certifi 2026.10.19 (shipped in v0.2.0, whose entry did not name the advisory):
+  [GHSA-6q48-6c7w-9gw2](https://github.com/advisories/GHSA-6q48-6c7w-9gw2), critical:
+  certifi before 2026.10.19 bundled emSign root certificates whose intermediate CA keys
+  were compromised. `requirements.txt` pins the fixed release; anything still on v0.1.0
+  should update.
+
 ### App actions required
 
-None. Existing configs and callers keep working unchanged; the rendered Android caller's
-header comment changes wording only (`caller check --pr` ignores comments).
+None. Existing configs and callers keep working unchanged: the rendered callers differ
+only in a comment (Android) and an input description (iOS), which `caller check --pr`
+ignores. Re-render them to pick up the new wording. An app still configured with
+`flow = "fud-ai"` keeps working; `"standard"` is the new name.
+
+### Verification
+
+- CI on `main` at `e2fbb27766ea6cfe9a26844b4936e43dd84ae3a5`, the code this release tags
+  (the release commit changes only this file, `__version__`, and the version in the
+  examples' and templates' rendered callers and config header):
+  [CI 39514758881](https://github.com/apoorvdarshan/store-release/actions/runs/39514758881)
+  (`test (stdlib)`, `test (strict)`, `test (macos)`, `lint`, `workflows`, and the advisory
+  `canary (fud-ai)`, which ran the store checks on fud-ai's `main`) and
+  [CodeQL 39514758924](https://github.com/apoorvdarshan/store-release/actions/runs/39514758924)
+  (`Analyze (python)`, `Analyze (actions)`). `release.yml` checks the required ones again on
+  the release commit.
+- job-setup's lazy blob fetch with a job token ran on GitHub in the `workflows` job (a
+  blobless, credential-free checkout fetched its patterns; no credential reached
+  `.git/config`).
+- Apps scaffolded by `init` (iOS, Android, both, and a generated Info.plist) pass the
+  whole Store checks sequence, `caller check --pr` and `pins check`
+  (`tests/apps/test_checks_sequence.py`), and the templates are `init`'s output.
+- Re-run probe: not run again. `probe-rerun.yml` and `probe-inner.yml` are unchanged since
+  the v0.1.0 results ([docs/rerun.md](docs/rerun.md#results)), and the callers call the
+  same jobs the same way.
+- No app validation dispatches yet: each app moves to v0.3.0 in its own pull request
+  (Dependabot), validated there. A defect they find ships as v0.3.1 (tags never move).
 
 ## [0.2.0] - 2026-10-21
 
@@ -206,6 +279,7 @@ No switch, secret or variable changes.
   migration PR, the next phase; they have not run yet. A defect they find ships as
   v0.1.1 (tags never move).
 
-[Unreleased]: https://github.com/apoorvdarshan/store-release/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/apoorvdarshan/store-release/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/apoorvdarshan/store-release/releases/tag/v0.3.0
 [0.2.0]: https://github.com/apoorvdarshan/store-release/releases/tag/v0.2.0
 [0.1.0]: https://github.com/apoorvdarshan/store-release/releases/tag/v0.1.0
