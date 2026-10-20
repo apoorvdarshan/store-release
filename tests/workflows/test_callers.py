@@ -62,7 +62,7 @@ class RenderTests(unittest.TestCase):
     def test_the_examples_are_the_renderer_output(self) -> None:
         for platform, name in FILES.items():
             with self.subTest(platform=platform):
-                self.assertEqual(render(platform), (EXAMPLES / "fud-ai" / "callers" / name).read_text())
+                self.assertEqual(render(platform, version=__version__), (EXAMPLES / "fud-ai" / "callers" / name).read_text())
 
     def test_the_rendered_callers_are_pinned_and_valid_yaml(self) -> None:
         for platform in FILES:

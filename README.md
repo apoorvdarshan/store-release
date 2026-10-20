@@ -21,7 +21,7 @@ An app keeps three things:
 
 ```yaml
   prepare:
-    uses: apoorvdarshan/store-release/.github/workflows/ios-prepare.yml@<40-hex sha> # v0.1.0
+    uses: apoorvdarshan/store-release/.github/workflows/ios-prepare.yml@<40-hex sha> # v0.2.0
     permissions:
       contents: read
     secrets:
@@ -31,7 +31,7 @@ An app keeps three things:
 
 ```bash
 python3 -I -u store-release/run.py --app-root . callers render --platform ios \
-  --sha <sha> --version 0.1.0 --out .github/workflows/ios-release.yml
+  --sha <sha> --version 0.2.0 --out .github/workflows/ios-release.yml
 ```
 
 [Fud AI's callers](examples/fud-ai/callers/) are the reference. A tag push
