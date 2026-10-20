@@ -8,6 +8,41 @@ or `config-breaking`.
 
 ## [Unreleased]
 
+Impact: release-path
+
+The other five apps' pipelines: Scowld, Verceltics (iOS and Android), ABYSM, PCM
+Notes and Quit All, each kept as it is ([flows](docs/flows.md)). Fud AI's behaviour,
+config and rendered callers do not change.
+
+### Added
+
+- Ported flows (`store_release/flows/`), selected by `ios.flow` and `android.flow`
+  (default `fud-ai`): each app's store scripts at the commit in
+  [provenance](docs/provenance.md), with only the port's edits, proven by
+  `tests/unit/test_flows.py`; the apps' own 900 store tests run unchanged against
+  them (`tests/parity/test_parity_flows.py`), with the 101 left out listed with
+  reasons in `tests/flows/*.inventory`.
+- Config keys (all optional, defaults keep Fud AI's behaviour): `ios.gate_policy`,
+  `ios.prepare.checks`/`checkout`, `ios.build.post_archive`/`extensions`/`app_groups`/
+  `verify_ipa`, `ios.listing.dir`, `ios.whats_new.version_file`,
+  `ios.screenshot_manifest`, `ios.catalog.storekit`/`products_source`,
+  `ios.github_release.on_existing`/`latest`/`source_archive` and the title
+  placeholders `{tag}`, `{build_suffix}`; `android.build.signing =
+  "gradle-properties"` with its property names, `key_alias`, `sdk_packages`;
+  release-notes What's New and file listings for Android; gate jobs' `with:` inputs;
+  `unique_headings`.
+- `ios-source-archive.yml` (the eleventh reusable workflow), the
+  `keystore_only` input of `android-publish.yml`, `ios verify-bundles`, the
+  `pre_archive`/`post_archive`/`prepare` hook stages, file names in the redactor.
+- `examples/{scowld,verceltics,abysm,pcm-notes,quit-all}/` with rendered callers and
+  [MIGRATING.md](examples/MIGRATING.md); CI lints every example's callers.
+
+### App actions required
+
+None for Fud AI. Each of the other apps moves in its own pull request
+([examples/MIGRATING.md](examples/MIGRATING.md)); until then it keeps its own
+pipeline.
+
 ## [0.1.0] - 2026-10-20
 
 Impact: release-path

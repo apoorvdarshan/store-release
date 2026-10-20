@@ -1,6 +1,6 @@
 # Reusable workflows
 
-Ten single-job reusable workflows (`on: workflow_call`). An app calls them from three
+Eleven single-job reusable workflows (`on: workflow_call`). An app calls them from three
 thin caller workflows that `run.py callers render` writes from its config
 ([Fud AI's](../examples/fud-ai/callers/)); each caller job calls exactly one of them,
 so **Re-run failed jobs** works per stage ([rerun.md](rerun.md)).
@@ -22,6 +22,26 @@ Store checks (.github/workflows/store-checks.yml; PRs, main pushes, Run workflow
   checks ─► store-release (a plain aggregator job with a stable name)
 ```
 
+The five ported flows ([flows.md](flows.md)) use the same workflows and callers, with
+three differences the config selects:
+
+- `ios.gate_policy`: `parallel` (gates next to prepare, as above), `after-prepare`
+  (gates need prepare; Quit All) or `when-uploading` (gates need prepare and run only
+  on a tag run that uploads a build; build waits for them only then; PCM Notes).
+- `ios.github_release.source_archive` (Scowld): a `source-archive` job between
+  app-store-connect and github-release calls `ios-source-archive.yml`, the only job
+  with `id-token: write` and `attestations: write`: a `git archive` of the tagged
+  commit, its `.sha256`, a cosign keyless bundle and a build-provenance attestation,
+  which github-release attaches.
+- `android.build.signing = "gradle-properties"` (Verceltics): the caller passes
+  `keystore_only: true` and only the two `ANDROID_KEYSTORE_*` secrets; the keystore
+  and a password file are given to Gradle as `-P` properties.
+
+Prepare also runs `ios.prepare.checks` (Verceltics' offline repository tests) and a
+flow's catalog check, build runs `ios.build.post_archive` hooks after the archive
+check and, with `ios.build.verify_ipa`, exports once to verify the signed IPA's
+bundles before validating.
+
 Merging never starts a release. Only a tag push releases; a dispatch only validates
 and plans.
 
@@ -33,10 +53,11 @@ and plans.
 | `ios-build.yml` | `build` | `inputs.runner` (default `xcode-27`) | 90 | `config`, `runner`, **`gates`**, **`mode`**, **`marketing_version`**, **`build_number`**, **`tool_sha`** | `upload_started_at` |
 | `ios-wait-for-build.yml` | `wait-for-build` | ubuntu-latest | 310 | `config`, **`marketing_version`**, **`build_number`**, **`upload_started_at`**, **`wait_minutes`**, **`poll_seconds`**, **`tool_sha`** | `build_id` |
 | `ios-app-store-connect.yml` | `app-store-connect` | ubuntu-latest | 60 | `config`, **`gates`**, **`marketing_version`**, **`build_number`**, **`build_id`**, **`upload_build`**, **`listing`**, **`whats_new`**, **`screenshots`**, **`creative`**, **`submit`**, **`public_release`**, **`tool_sha`** | |
+| `ios-source-archive.yml` | `source-archive` | ubuntu-latest | 10 | `config`, **`gates`**, **`marketing_version`**, **`uploaded_build`**, **`tool_sha`** | |
 | `ios-github-release.yml` | `github-release` | ubuntu-latest | 10 | `config`, **`gates`**, **`marketing_version`**, **`uploaded_build`**, **`tool_sha`** | |
 | `ios-store-plan.yml` | `store-plan` | ubuntu-latest | 15 | `config`, **`marketing_version`**, **`tool_sha`** | |
 | `android-gates.yml` | `gates` | ubuntu-latest | 10 | `config` | `mode`, `build`, `github_release`, `listing`, `whats_new`, `screenshots`, `production`, `play_upload`, `play_tracks`, `tool_sha` |
-| `android-publish.yml` | `release` | ubuntu-latest | 60 | `config`, **`gates`**, **`mode`**, **`build`**, **`github_release`**, **`listing`**, **`whats_new`**, **`screenshots`**, **`production`**, **`play_upload`**, **`play_tracks`**, **`tool_sha`** | |
+| `android-publish.yml` | `release` | ubuntu-latest | 60 | `config`, `keystore_only`, **`gates`**, **`mode`**, **`build`**, **`github_release`**, **`listing`**, **`whats_new`**, **`screenshots`**, **`production`**, **`play_upload`**, **`play_tracks`**, **`tool_sha`** | |
 | `android-store-plan.yml` | `store-plan` | ubuntu-latest | 15 | `config`, **`tool_sha`** | |
 | `checks.yml` | `checks` | ubuntu-latest | 15 | `config` | |
 

@@ -30,7 +30,8 @@ names any that is missing.
 | `ios-github-release.yml` | none | | the caller's `GITHUB_TOKEN` (`contents: write`) |
 | `ios-store-plan.yml` | the three `APP_STORE_CONNECT_*` | yes | the read-only plan |
 | `android-gates.yml` | `PLAY_SERVICE_ACCOUNT_JSON` | no; checked when a Play track is on | the read-only check that the versionCode is new to Play |
-| `android-publish.yml` | `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD` | yes (validation runs too) | signing the AAB and APK with the upload key |
+| `android-publish.yml` | `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD` | yes (validation runs too); with `android.build.signing = "gradle-properties"` only the two `ANDROID_KEYSTORE_*` (the keystore password is also the key password, alias from `android.build.key_alias`) | signing the AAB and APK with the upload key |
+| `ios-source-archive.yml` | none | | `id-token: write` for the keyless cosign signature and the provenance attestation |
 | | `PLAY_SERVICE_ACCOUNT_JSON` | no; checked when a listing, screenshot or track switch is on | Play listing, uploads, track read-back |
 | `android-store-plan.yml` | `PLAY_SERVICE_ACCOUNT_JSON` | no; without it the Play part is skipped | the read-only plan |
 | `checks.yml` | none | | |

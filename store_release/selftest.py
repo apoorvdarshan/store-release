@@ -25,8 +25,8 @@ TOOL_ROOT = Path(__file__).resolve().parents[1]
 TESTS = TOOL_ROOT / "tests"
 SUITES = ("unit", "apps", "parity", "workflows")
 PLATFORM_FILES = {
-    "ios": ("test_ios_release.py", "test_core.py", "test_ios_extra.py"),
-    "android": ("test_android_release.py", "test_core.py", "test_android_extra.py"),
+    "ios": ("test_ios_release.py", "test_core.py", "test_ios_extra.py", "test_flows.py"),
+    "android": ("test_android_release.py", "test_core.py", "test_android_extra.py", "test_flows.py"),
 }
 PILLOW_SKIP = "needs Pillow"
 

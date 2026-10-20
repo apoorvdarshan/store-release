@@ -40,6 +40,10 @@ def tables(config: Config) -> frozenset[str]:
 def configure(config: Config, app_root: Path, *, config_path: str = "store/store-release.toml") -> None:
     root = Path(app_root)
     present = tables(config)
+    # The ported flows (ios.flow / android.flow other than fud-ai) read their constants here.
+    from store_release import flows  # noqa: PLC0415
+
+    flows.configure(config, root)
 
     release_notes.ROOT = root
     release_notes.NOTES_RELPATH = config.release_notes

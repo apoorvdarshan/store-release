@@ -50,8 +50,9 @@ commands:
   github stage-android-assets
   smoke              import the store tooling and mint an ES256 JWT (no network)
   ios <command>      gates, build-number, version-preflight, export-compliance, wait-build,
-                     project-version, store-step, select-xcode, verify-archive,
-                     export-options, redact-logs, plan
+                     project-version, store-step, select-xcode, verify-archive, verify-bundles,
+                     export-options, redact-logs, plan; a ported flow (ios.flow) also has
+                     check-inputs, preflight and export-listing
   android <command>  gates, verify, check-tracks, play-preflight, github-preflight,
                      write-signing-properties, gradle-version, play-listing, plan
   canary             store-release CI only: the checks sequence against a real app
@@ -119,6 +120,17 @@ class App:
         from store_release import context  # noqa: PLC0415
 
         context.configure(self.config, app_root, config_path=config_path)
+
+    @property
+    def flow_app(self) -> bool:
+        """True when a platform of this config runs a ported flow (store_release.flows)."""
+        ios, android = self.config.ios, self.config.android
+        return (ios is not None and ios.flow != "fud-ai") or (android is not None and android.flow != "fud-ai")
+
+    @property
+    def flow_names(self) -> str:
+        names = {p.flow for p in (self.config.ios, self.config.android) if p is not None and p.flow != "fud-ai"}
+        return ", ".join(sorted(names))
 
     def need(self, platform: str) -> None:
         if platform == "ios" and self.config.ios is None:
@@ -303,7 +315,13 @@ def run(argv: list[str]) -> int:
         release_notes.main(rest)
         return 0
     if command == "catalog":
-        two_words(command, rest, ("check",))
+        sub, args = two_words(command, rest, ("check",))
+        if app.flow_app:
+            from store_release.flows import commands  # noqa: PLC0415
+
+            return commands.catalog_check(app.config, args)
+        if args:
+            raise UsageError("catalog check takes no arguments for the fud-ai flow")
         from store_release import catalog  # noqa: PLC0415
 
         catalog.check()
@@ -321,6 +339,9 @@ def run(argv: list[str]) -> int:
             catalog.revenuecat_gate()
         return 0
     if command in ("listing", "whats-new", "screenshots"):
+        if app.flow_app:
+            raise UsageError(f"`{command}` is the fud-ai flow's step; the {app.flow_names} flow reads its "
+                             "store files itself (ios check-inputs, ios store-step)")
         verb = {"listing": "prepare", "whats-new": "prepare", "screenshots": "stage"}[command]
         sub, args = two_words(command, rest, (verb,))
         if option_value(args, "--out") is None:
@@ -338,16 +359,23 @@ def run(argv: list[str]) -> int:
     if command == "hooks":
         sub, args = two_words(command, rest, ("run",))
         parser = argparse.ArgumentParser(prog="hooks run")
-        parser.add_argument("--stage", required=True, choices=("pre_archive",))
-        parser.parse_args(args)
+        parser.add_argument("--stage", required=True, choices=("pre_archive", "post_archive", "prepare"))
+        ns = parser.parse_args(args)
         app.need("ios")
         from store_release import hooks  # noqa: PLC0415
 
-        extra = {name: os.environ[name] for name in ("MARKETING_VERSION", "BUILD_NUMBER", "DEVELOPER_DIR")
-                 if name in os.environ}
-        hooks.run(app.root, app.config.ios.build.pre_archive, env_extra=extra)
-        if not app.config.ios.build.pre_archive:
-            print("no ios.build.pre_archive hooks")
+        ios = app.config.ios
+        scripts = {"pre_archive": ios.build.pre_archive, "post_archive": ios.build.post_archive,
+                   "prepare": ios.prepare_checks}[ns.stage]
+        names = {"pre_archive": ("MARKETING_VERSION", "BUILD_NUMBER", "DEVELOPER_DIR"),
+                 "post_archive": ("ARCHIVE_PATH", "APP_PATH", "MARKETING_VERSION", "BUILD_NUMBER", "DEVELOPER_DIR"),
+                 "prepare": ("GITHUB_EVENT_NAME", "GITHUB_REF_NAME")}[ns.stage]
+        extra = {name: os.environ[name] for name in names if name in os.environ}
+        hooks.run(app.root, scripts, env_extra=extra)
+        if not scripts:
+            label = {"pre_archive": "ios.build.pre_archive", "post_archive": "ios.build.post_archive",
+                     "prepare": "ios.prepare.checks"}[ns.stage]
+            print(f"no {label} hooks")
         return 0
     if command == "github":
         sub, args = two_words(command, rest, ("release", "stage-android-assets"))
@@ -390,13 +418,25 @@ def run(argv: list[str]) -> int:
 
 IOS_RELEASE_COMMANDS = ("gates", "build-number", "version-preflight", "export-compliance", "wait-build",
                         "project-version")
-IOS_ARCHIVE_COMMANDS = ("select-xcode", "verify-archive", "export-options")
+IOS_ARCHIVE_COMMANDS = ("select-xcode", "verify-archive", "export-options", "verify-bundles")
+
+
+FLOW_IOS_COMMANDS = ("gates", "build-number", "wait-build", "export-compliance", "project-version", "check-inputs",
+                     "preflight", "store-step", "export-listing", "pr-checks")
 
 
 def ios_command(app: App, rest: list[str]) -> int:
     if not rest:
         raise UsageError("ios needs a command")
     sub, args = rest[0], rest[1:]
+    if app.config.ios.flow != "fud-ai" and sub in FLOW_IOS_COMMANDS:
+        from store_release.flows import commands  # noqa: PLC0415
+
+        return commands.ios(app.config, sub, args)
+    if app.config.ios.flow != "fud-ai" and sub == "version-preflight":
+        raise UsageError(f"the {app.config.ios.flow} flow runs `ios preflight`, not version-preflight")
+    if app.config.ios.flow == "fud-ai" and sub in ("check-inputs", "preflight", "export-listing", "pr-checks"):
+        raise UsageError(f"`ios {sub}` is a ported flow's command; the fud-ai flow does not have it")
     if sub in IOS_RELEASE_COMMANDS:
         from store_release.ios import release  # noqa: PLC0415
 
@@ -413,13 +453,28 @@ def ios_command(app: App, rest: list[str]) -> int:
 
         ios = app.config.ios
         archive.main([sub, *args], app_root=app.root, developer_dir=ios.build.developer_dir,
-                     patterns=ios.build.package_cache_files, bundle_id=ios.bundle_id, team_id=ios.team_id)
+                     patterns=ios.build.package_cache_files, bundle_id=ios.bundle_id, team_id=ios.team_id,
+                     config=app.config)
         return 0
     if sub == "plan":
+        if app.config.ios.flow != "fud-ai":
+            return flow_plan(app, "ios", args)
         from store_release.ios import plan  # noqa: PLC0415
 
         return plan.main(app, args)
     raise UsageError(f"unknown ios command {sub!r}")
+
+
+def flow_plan(app: App, platform: str, args: list[str]) -> int:
+    """A ported flow's read-only store plan (store_release.flows.plan)."""
+    parser = argparse.ArgumentParser(prog=f"{platform} plan")
+    if platform == "ios":
+        parser.add_argument("--version", required=True)
+    parser.add_argument("--work-dir", required=True, type=Path)
+    ns = parser.parse_args(args)
+    from store_release.flows import plan  # noqa: PLC0415
+
+    return plan.main(app, platform, ns)
 
 
 ANDROID_RELEASE_COMMANDS = ("gates", "verify", "check-tracks", "play-preflight", "github-preflight",
@@ -430,6 +485,10 @@ def android_command(app: App, rest: list[str]) -> int:
     if not rest:
         raise UsageError("android needs a command")
     sub, args = rest[0], rest[1:]
+    if app.config.android.flow != "fud-ai" and sub not in ("plan",):
+        from store_release.flows import commands  # noqa: PLC0415
+
+        return commands.android(app.config, sub, args)
     if sub in ANDROID_RELEASE_COMMANDS:
         from store_release.android import release  # noqa: PLC0415
 
@@ -442,6 +501,8 @@ def android_command(app: App, rest: list[str]) -> int:
             play_listing.main()
         return 0
     if sub == "plan":
+        if app.config.android.flow != "fud-ai":
+            return flow_plan(app, "android", args)
         from store_release.android import plan  # noqa: PLC0415
 
         return plan.main(app, args)

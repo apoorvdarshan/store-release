@@ -12,11 +12,10 @@ from store_release.ios import release as ios_release
 TOOL_ROOT = Path(__file__).resolve().parents[2]
 DOCS = TOOL_ROOT / "docs"
 DOC_SET = ("config.md", "switches.md", "secrets.md", "workflows.md", "rerun.md", "plan.md", "verification.md",
-           "release-process.md", "yanked.md", "provenance.md", "roadmap.md")
-EXAMPLES = (TOOL_ROOT / "examples" / "fud-ai" / "store-release.toml",
-            TOOL_ROOT / "examples" / "example" / "store-release.toml")
-# Keys whose value is a table of the app's own names (file paths), documented as one key.
-MAP_KEYS = {"ios.creative.sizes"}
+           "release-process.md", "yanked.md", "provenance.md", "roadmap.md", "flows.md")
+EXAMPLES = tuple(sorted((TOOL_ROOT / "examples").glob("*/store-release.toml")))
+# Keys whose value is a table of the app's own names (file paths, bundle ids), documented as one key.
+MAP_KEYS = {"ios.creative.sizes", "ios.build.app_groups"}
 
 
 def every_switch() -> list[str]:

@@ -10,6 +10,26 @@ Every behaviour, API call, switch, secret name, tag rule, title and asset name i
 kept. Fud AI's constants became config values ([config.md](config.md)); module
 boundaries are kept 1:1, so the ported tests changed only in imports and fixtures.
 
+v0.2.0 adds the other five apps' pipelines as ported flows ([flows.md](flows.md)), from:
+
+| App | Repository | Commit |
+|---|---|---|
+| Scowld | `apoorvdarshan/scowld` | `5283a488f84dfda7626474a6a99ce034c2de4db7` |
+| Verceltics | `apoorvdarshan/verceltics` | `30378f64921232eed032561587d8461de554df06` |
+| ABYSM | `apoorvdarshan/abysm` | `a12a6d24ba3f47712844aebe370214f25d4bea50` |
+| PCM Notes | `apoorvdarshan/pcm-notes` | `517b61a78f6603e7ed5164e53d811979a5caa64d` |
+| Quit All | `apoorvdarshan/quit-all` | `34b81989a8df2aa7c7cd05ee9aaf4b41c114b87e` |
+
+Each app's store scripts and store tests are copied verbatim into
+`tests/parity/upstream_<package>_<sha9>/` (hashed in `MANIFEST.sha256`); the flow
+modules in `store_release/flows/<package>/` are those scripts with only the port's
+edits, and the app's own suite runs against them. The bash steps of each app's
+release workflow (archive checks, Quit All's `verify_ios_bundles.sh`, export
+compliance, GitHub Release titles and policies, Scowld's source archive, Verceltics'
+Gradle signing and Play steps) became config keys of the shared workflows. Quit All
+and PCM Notes' NOTICE files are all rights reserved for their app code; only their
+store tooling, written by the same author, is copied.
+
 ## File mapping
 
 | fud-ai `a99591908` | store-release |

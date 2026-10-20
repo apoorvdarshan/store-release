@@ -19,6 +19,7 @@ JOBS = (
     "ios-wait-for-build",
     "ios-app-store-connect",
     "ios-github-release",
+    "ios-source-archive",
     "ios-store-plan",
     "android-gates",
     "android-publish",
@@ -29,19 +30,21 @@ JOBS = (
 # What each job reads, in order. Parts a config does not have are skipped.
 RECIPES = {
     "ios-prepare": ("caller", "store", "pbxproj", "info_plist", "release_notes", "ios_listing", "ios_whats_new",
-                    "catalog_hooks"),
+                    "catalog_hooks", "catalog_sources", "prepare_hooks", "prepare_checkout"),
     "ios-build": ("pbxproj", "build_hooks", "ios_checkout"),
     "ios-wait-for-build": (),
-    "ios-app-store-connect": ("store", "ios_listing", "ios_whats_new"),
+    "ios-app-store-connect": ("store", "ios_listing", "ios_whats_new", "flow_release_notes", "catalog_sources"),
     "ios-github-release": ("release_notes", "pbxproj"),
-    "ios-store-plan": ("store", "ios_listing", "ios_whats_new", "pbxproj"),
+    "ios-source-archive": (),
+    "ios-store-plan": ("store", "ios_listing", "ios_whats_new", "pbxproj", "flow_release_notes", "catalog_sources"),
     "android-gates": ("caller", "gradle", "release_notes", "play_listing", "play_whats_new"),
     "android-publish": ("store", "release_notes", "play_listing", "play_whats_new", "catalog_hooks",
-                        "android_checkout"),
+                        "catalog_sources", "android_checkout"),
     "android-store-plan": ("gradle", "store", "play_listing", "play_whats_new", "release_notes"),
     # config check --files verifies every hook script exists, so the build hooks are checked out too.
     "checks": ("workflows", "store", "ios_listing", "ios_whats_new", "play_listing", "play_whats_new",
-               "release_notes", "pbxproj", "info_plist", "gradle", "catalog_hooks", "build_hooks"),
+               "release_notes", "pbxproj", "info_plist", "gradle", "catalog_hooks", "build_hooks",
+               "catalog_sources", "prepare_hooks"),
 }
 
 CALLER_PATH = re.compile(r"\.github/workflows/[A-Za-z0-9._-]+\.ya?ml")
@@ -90,23 +93,44 @@ def _part(config: Config, part: str, environ: dict[str, str]) -> list[str]:
         return [f"/{config.release_notes}"]
     if part == "catalog_hooks":
         return [f"/{hook}" for hook in config.catalog.checks] if config.catalog else []
+    if part == "catalog_sources":
+        # The app files a ported flow's catalog check reads (StoreKit file, product constants).
+        catalog = config.catalog
+        return [f"/{path}" for path in (catalog.storekit, catalog.products_source) if path] if catalog else []
+    if part == "prepare_hooks":
+        return [f"/{hook}" for hook in ios.prepare_checks] if ios else []
+    if part == "prepare_checkout":
+        return list(ios.prepare_checkout) if ios else []
+    if part == "flow_release_notes":
+        # What's New from the tag's release notes (the verceltics flow) reads RELEASE_NOTES.md.
+        if ios and ios.whats_new and ios.whats_new.source == "release-notes":
+            return [f"/{config.release_notes}"]
+        return []
     if part == "pbxproj":
         return [f"/{ios.pbxproj}"] if ios else []
     if part == "info_plist":
-        return [f"/{ios.info_plist}"] if ios else []
+        return [f"/{ios.info_plist}"] if ios and ios.info_plist else []
     if part == "ios_listing":
+        if ios and ios.listing and ios.listing.source == "files":
+            return [] if ios.listing.dir.startswith("store/") else [f"/{ios.listing.dir}/"]
         return [f"/{ios.listing.markdown}"] if ios and ios.listing else []
     if part == "ios_whats_new":
+        if ios and ios.whats_new and ios.whats_new.source != "markdown":
+            return []
         return [f"/{ios.whats_new.markdown}"] if ios and ios.whats_new else []
     if part == "build_hooks":
-        return [f"/{hook}" for hook in ios.build.pre_archive] if ios else []
+        return [f"/{hook}" for hook in (*ios.build.pre_archive, *ios.build.post_archive)] if ios else []
     if part == "ios_checkout":
         return list(ios.build.checkout) if ios else []
     if part == "gradle":
         return [f"/{android.gradle_file}"] if android else []
     if part == "play_listing":
+        if android and android.listing and android.listing.source == "files":
+            return [] if android.listing.dir.startswith("store/") else [f"/{android.listing.dir}/"]
         return [f"/{android.listing.markdown}"] if android and android.listing else []
     if part == "play_whats_new":
+        if android and android.whats_new and android.whats_new.source != "markdown":
+            return []
         return [f"/{android.whats_new.markdown}"] if android and android.whats_new else []
     if part == "android_checkout":
         return list(android.build.checkout) if android else []

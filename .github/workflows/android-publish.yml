@@ -12,6 +12,12 @@ on:
         description: The app's store-release.toml, relative to its repository root.
         type: string
         default: store/store-release.toml
+      keystore_only:
+        description: >-
+          true for android.build.signing = "gradle-properties": only ANDROID_KEYSTORE_BASE64 and
+          ANDROID_KEYSTORE_PASSWORD are needed (the caller renders this from the config).
+        type: boolean
+        default: false
       gates:
         description: The gate jobs' results, "<job>=<result>" separated by spaces.
         type: string
@@ -52,10 +58,11 @@ on:
         required: true
       ANDROID_KEYSTORE_PASSWORD:
         required: true
+      # Only android.build.signing = "keystore-properties" uses these two.
       ANDROID_KEY_ALIAS:
-        required: true
+        required: false
       ANDROID_KEY_PASSWORD:
-        required: true
+        required: false
       PLAY_SERVICE_ACCOUNT_JSON:
         required: false
 
@@ -85,9 +92,14 @@ jobs:
           HAS_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD != '' }}
           HAS_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS != '' }}
           HAS_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD != '' }}
+          # gradle-properties signing (the key alias is in the config; the key password is the
+          # store password) needs only the keystore and its password.
+          KEYSTORE_ONLY: ${{ inputs.keystore_only }}
         run: |
           missing=()
-          for name in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+          names=(ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD)
+          if [ "$KEYSTORE_ONLY" = true ]; then names=(ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD); fi
+          for name in "${names[@]}"; do
             has="HAS_$name"; [ "${!has}" = true ] || missing+=("$name")
           done
           if [ "${#missing[@]}" -gt 0 ]; then
@@ -137,11 +149,44 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
+        if: env.STORE_RELEASE_ANDROID_SDK_PACKAGES != ''
+        with:
+          packages: ${{ env.STORE_RELEASE_ANDROID_SDK_PACKAGES }}
       - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
       - name: Validate IAP catalog
+        if: env.STORE_RELEASE_ANDROID_FLOW == 'fud-ai'
         run: python3 -I -u .store-release/run.py --app-root app catalog check
+      # The verceltics flow: its Android catalog check, and the Play listing and screenshots
+      # this run uploads.
+      - name: Validate the IAP catalog, and the Play listing and screenshots this run uploads (ported flow)
+        if: env.STORE_RELEASE_ANDROID_FLOW != 'fud-ai'
+        env:
+          LISTING: ${{ inputs.listing }}
+          SCREENSHOTS: ${{ inputs.screenshots }}
+        run: |
+          set -euo pipefail
+          python3 -I -u .store-release/run.py --app-root app catalog check --platform android
+          flags=()
+          if [ "$LISTING" = true ]; then flags+=(--listing); fi
+          if [ "$SCREENSHOTS" = true ]; then flags+=(--screenshots); fi
+          if [ "${#flags[@]}" -gt 0 ]; then
+            python3 -I -u .store-release/run.py --app-root app android play-listing check "${flags[@]}"
+          fi
+      - name: Prepare reviewed release notes, What's New + listing text (ported flow, local only)
+        if: env.RELEASE_RUN == 'true' && env.STORE_RELEASE_ANDROID_FLOW != 'fud-ai'
+        env:
+          WHATS_NEW: ${{ inputs.whats_new }}
+          LISTING: ${{ inputs.listing }}
+        run: |
+          set -euo pipefail
+          python3 -I -u .store-release/run.py --app-root app release-notes --if-present "$GITHUB_REF_NAME" > "$RUNNER_TEMP/release-notes.md"
+          args=()
+          if [ "$WHATS_NEW" = true ]; then args+=(--tag "$GITHUB_REF_NAME"); fi
+          if [ "$LISTING" != true ]; then args+=(--no-listing); fi
+          python3 -I -u .store-release/run.py --app-root app android play-listing prepare --out "$RUNNER_TEMP/store-meta" "${args[@]}"
       - name: Prepare reviewed release notes, What's New + listing text (local only)
-        if: env.RELEASE_RUN == 'true'
+        if: env.RELEASE_RUN == 'true' && env.STORE_RELEASE_ANDROID_FLOW == 'fud-ai'
         env:
           WHATS_NEW: ${{ inputs.whats_new }}
           LISTING: ${{ inputs.listing }}
@@ -159,6 +204,7 @@ jobs:
       # Under $RUNNER_TEMP with umask 077, never in the checkout: Gradle reads the
       # keystore properties path, which is only a link to the private file.
       - name: Materialize upload keystore
+        if: env.STORE_RELEASE_ANDROID_SIGNING == 'keystore-properties'
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -172,13 +218,30 @@ jobs:
             --keystore "$RUNNER_TEMP/$STORE_RELEASE_SLUG-release.jks" \
             --out "$RUNNER_TEMP/$STORE_RELEASE_SLUG-keystore.properties"
           ln -sfn "$RUNNER_TEMP/$STORE_RELEASE_SLUG-keystore.properties" "app/$STORE_RELEASE_ANDROID_KEYSTORE_PROPERTIES"
+      # android.build.signing = "gradle-properties": the keystore and a file holding its
+      # password, both under $RUNNER_TEMP (umask 077), passed to Gradle as properties.
+      - name: Materialize upload keystore (gradle-properties)
+        if: env.STORE_RELEASE_ANDROID_SIGNING == 'gradle-properties'
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          umask 077
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/$STORE_RELEASE_SLUG-release.jks"
+          printf '%s' "$ANDROID_KEYSTORE_PASSWORD" > "$RUNNER_TEMP/$STORE_RELEASE_SLUG-keystore-password"
       # Store artifacts are always built fresh, never from cached task outputs.
       - name: Build signed AAB + APK
         run: |
           set -euo pipefail
           cd "app/$STORE_RELEASE_ANDROID_BUILD_DIR"
           read -r -a tasks <<< "$STORE_RELEASE_ANDROID_TASKS"
-          ./gradlew --no-build-cache "${tasks[@]}"
+          properties=()
+          if [ "$STORE_RELEASE_ANDROID_SIGNING" = gradle-properties ]; then
+            properties=("-P${STORE_RELEASE_ANDROID_KEYSTORE_PROPERTY}=$RUNNER_TEMP/$STORE_RELEASE_SLUG-release.jks"
+                        "-P${STORE_RELEASE_ANDROID_PASSWORD_FILE_PROPERTY}=$RUNNER_TEMP/$STORE_RELEASE_SLUG-keystore-password")
+          fi
+          ./gradlew --no-build-cache "${tasks[@]}" "${properties[@]}"
       # Fails unless both artifacts are this package and version, signed only by the
       # pinned upload certificate (android.upload_cert_sha256).
       - name: Verify package, version and upload-key signature
@@ -192,15 +255,17 @@ jobs:
           curl -fsSL -o "$RUNNER_TEMP/bundletool.jar" \
             "https://github.com/google/bundletool/releases/download/${BUNDLETOOL_VERSION}/bundletool-all-${BUNDLETOOL_VERSION}.jar"
           echo "${BUNDLETOOL_SHA256}  $RUNNER_TEMP/bundletool.jar" | sha256sum -c -
+          alias="$ANDROID_KEY_ALIAS"
+          if [ "$STORE_RELEASE_ANDROID_SIGNING" = gradle-properties ]; then alias="$STORE_RELEASE_ANDROID_KEY_ALIAS"; fi
           python3 -I -u .store-release/run.py --app-root app android verify --aab "app/$STORE_RELEASE_ANDROID_AAB" --apk "app/$STORE_RELEASE_ANDROID_APK" \
-            --keystore "$RUNNER_TEMP/$STORE_RELEASE_SLUG-release.jks" --alias "$ANDROID_KEY_ALIAS" \
+            --keystore "$RUNNER_TEMP/$STORE_RELEASE_SLUG-release.jks" --alias "$alias" \
             --bundletool "$RUNNER_TEMP/bundletool.jar"
       - name: Remove upload keystore
         if: always()
         run: |
           [ -n "${STORE_RELEASE_SLUG:-}" ] || exit 0
           rm -f "${RUNNER_TEMP:?}/${STORE_RELEASE_SLUG:?}-release.jks" "${RUNNER_TEMP:?}/${STORE_RELEASE_SLUG:?}-keystore.properties" \
-            "app/${STORE_RELEASE_ANDROID_KEYSTORE_PROPERTIES:?}"
+            "${RUNNER_TEMP:?}/${STORE_RELEASE_SLUG:?}-keystore-password" "app/${STORE_RELEASE_ANDROID_KEYSTORE_PROPERTIES:?}"
       - name: Stage release artifacts
         if: env.RELEASE_RUN == 'true'
         run: python3 -I -u .store-release/run.py --app-root app github stage-android-assets --tag "$GITHUB_REF_NAME" --out "$RUNNER_TEMP/dist"
@@ -225,17 +290,26 @@ jobs:
         if: inputs.listing == 'true' || inputs.screenshots == 'true' || inputs.play_upload == 'true'
         run: python3 -m pip install --disable-pip-version-check --require-hashes -r .store-release/requirements.txt
       - name: Check the Play service account secret is set
-        if: inputs.listing == 'true' || inputs.screenshots == 'true' || inputs.play_upload == 'true'
+        if: >-
+          (inputs.listing == 'true' || inputs.screenshots == 'true' || inputs.play_upload == 'true') &&
+          env.STORE_RELEASE_ANDROID_FLOW == 'fud-ai'
         env:
           HAS_PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON != '' }}
         run: python3 -I -u .store-release/run.py --app-root app secrets check PLAY_SERVICE_ACCOUNT_JSON
       - name: Stage Play screenshots
-        if: inputs.screenshots == 'true'
+        if: inputs.screenshots == 'true' && env.STORE_RELEASE_ANDROID_FLOW == 'fud-ai'
         env:
           STORE_UPLOAD_SCREENSHOTS: "true"
         run: python3 -I -u .store-release/run.py --app-root app screenshots stage --platform play --out "$RUNNER_TEMP/store-release/screenshots"
+      - name: Play listing / screenshots upload (ported flow)
+        if: (inputs.listing == 'true' || inputs.screenshots == 'true') && env.STORE_RELEASE_ANDROID_FLOW != 'fud-ai'
+        env:
+          UPLOAD_LISTING: ${{ inputs.listing }}
+          UPLOAD_SCREENSHOTS: ${{ inputs.screenshots }}
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+        run: python3 -I -u .store-release/run.py --app-root app android play-listing upload --metadata-dir "$RUNNER_TEMP/store-meta"
       - name: Play listing / screenshots upload
-        if: inputs.listing == 'true' || inputs.screenshots == 'true'
+        if: (inputs.listing == 'true' || inputs.screenshots == 'true') && env.STORE_RELEASE_ANDROID_FLOW == 'fud-ai'
         env:
           UPLOAD_LISTING: ${{ inputs.listing }}
           UPLOAD_SCREENSHOTS: ${{ inputs.screenshots }}
@@ -244,12 +318,12 @@ jobs:
           python3 -I -u .store-release/run.py --app-root app android play-listing --metadata-dir "$RUNNER_TEMP/store-meta"
           --screenshots-dir "$RUNNER_TEMP/store-release/screenshots/play/phone"
       - name: RevenueCat catalog sync (gated)
-        if: env.RELEASE_RUN == 'true'
+        if: env.RELEASE_RUN == 'true' && env.STORE_RELEASE_ANDROID_FLOW == 'fud-ai'
         env:
           STORE_SYNC_REVENUECAT: ${{ vars.STORE_SYNC_REVENUECAT }}
         run: python3 -I -u .store-release/run.py --app-root app revenuecat-gate
       - name: Keep English What's New only
-        if: inputs.play_upload == 'true' && inputs.whats_new == 'true'
+        if: inputs.play_upload == 'true' && inputs.whats_new == 'true' && env.STORE_RELEASE_ANDROID_FLOW == 'fud-ai'
         run: |
           NOTES="$RUNNER_TEMP/store-meta/play/whatsnew-$STORE_RELEASE_ANDROID_LOCALE"
           if [ ! -s "$NOTES" ]; then
@@ -259,9 +333,65 @@ jobs:
           find "$RUNNER_TEMP/store-meta/play" -name 'whatsnew-*' ! -name "whatsnew-$STORE_RELEASE_ANDROID_LOCALE" -delete
       # Read-only, right before the upload. A versionCode an earlier attempt of this
       # run already got onto every selected track is not uploaded again.
+      # The verceltics flow: a versionCode every selected track already holds completed (an
+      # earlier attempt's upload) is not uploaded again; any other state of it stops the run.
+      - name: Check this versionCode on the selected Play tracks (read-only, ported flow)
+        id: play_state
+        if: inputs.play_upload == 'true' && env.STORE_RELEASE_ANDROID_FLOW != 'fud-ai'
+        env:
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          PLAY_TRACKS: ${{ inputs.play_tracks }}
+        run: python3 -I -u .store-release/run.py --app-root app android play-state --tracks "$PLAY_TRACKS"
+      - name: Keep English What's New only (ported flow)
+        if: >-
+          inputs.play_upload == 'true' && inputs.whats_new == 'true' && env.STORE_RELEASE_ANDROID_FLOW != 'fud-ai' &&
+          steps.play_state.outputs.uploaded == 'false'
+        run: |
+          NOTES="$RUNNER_TEMP/store-meta/play/whatsnew-$STORE_RELEASE_ANDROID_LOCALE"
+          if [ ! -s "$NOTES" ]; then
+            echo "error: ANDROID_UPLOAD_WHATS_NEW is on, but whatsnew-$STORE_RELEASE_ANDROID_LOCALE is missing" >&2
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/whats-new"
+          cp "$NOTES" "$RUNNER_TEMP/whats-new/"
+      - name: Materialize the Play service-account key (ported flow)
+        if: >-
+          inputs.play_upload == 'true' && inputs.play_tracks != '' && env.STORE_RELEASE_ANDROID_FLOW != 'fud-ai' &&
+          steps.play_state.outputs.uploaded == 'false'
+        env:
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+        run: |
+          umask 077
+          printf '%s' "$PLAY_SERVICE_ACCOUNT_JSON" > "$RUNNER_TEMP/play-service-account.json"
+      - name: Upload to Play (${{ inputs.play_tracks }}, ported flow)
+        if: >-
+          inputs.play_upload == 'true' && inputs.play_tracks != '' && env.STORE_RELEASE_ANDROID_FLOW != 'fud-ai' &&
+          steps.play_state.outputs.uploaded == 'false' && inputs.whats_new != 'true'
+        uses: r0adkll/upload-google-play@e738b9dd8f2476ea806d921b64aacd24f34515a5 # v1.1.5
+        with:
+          serviceAccountJson: ${{ runner.temp }}/play-service-account.json
+          packageName: ${{ env.STORE_RELEASE_ANDROID_PACKAGE }}
+          releaseFiles: app/${{ env.STORE_RELEASE_ANDROID_AAB }}
+          tracks: ${{ inputs.play_tracks }}
+          status: completed
+      - name: Upload to Play with What's New (${{ inputs.play_tracks }}, ported flow)
+        if: >-
+          inputs.play_upload == 'true' && inputs.play_tracks != '' && env.STORE_RELEASE_ANDROID_FLOW != 'fud-ai' &&
+          steps.play_state.outputs.uploaded == 'false' && inputs.whats_new == 'true'
+        uses: r0adkll/upload-google-play@e738b9dd8f2476ea806d921b64aacd24f34515a5 # v1.1.5
+        with:
+          serviceAccountJson: ${{ runner.temp }}/play-service-account.json
+          packageName: ${{ env.STORE_RELEASE_ANDROID_PACKAGE }}
+          releaseFiles: app/${{ env.STORE_RELEASE_ANDROID_AAB }}
+          tracks: ${{ inputs.play_tracks }}
+          status: completed
+          whatsNewDirectory: ${{ runner.temp }}/whats-new
+      - name: Remove the Play service-account key (ported flow)
+        if: always()
+        run: rm -f "${RUNNER_TEMP:?}/play-service-account.json"
       - name: Check what Google Play already has (read-only)
         id: play
-        if: inputs.play_upload == 'true'
+        if: inputs.play_upload == 'true' && env.STORE_RELEASE_ANDROID_FLOW == 'fud-ai'
         env:
           PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
           PLAY_TRACKS: ${{ inputs.play_tracks }}
@@ -270,7 +400,7 @@ jobs:
       # Both upload steps also require a non-empty track list: the action falls back to production without one.
       - name: Upload to Play (${{ inputs.play_tracks }})
         if: >-
-          inputs.play_upload == 'true' && inputs.play_tracks != '' &&
+          inputs.play_upload == 'true' && inputs.play_tracks != '' && env.STORE_RELEASE_ANDROID_FLOW == 'fud-ai' &&
           steps.play.outputs.play_upload_needed == 'true' && inputs.whats_new != 'true'
         uses: r0adkll/upload-google-play@e738b9dd8f2476ea806d921b64aacd24f34515a5 # v1.1.5
         with:
@@ -281,7 +411,7 @@ jobs:
           status: completed
       - name: Upload to Play with What's New (${{ inputs.play_tracks }})
         if: >-
-          inputs.play_upload == 'true' && inputs.play_tracks != '' &&
+          inputs.play_upload == 'true' && inputs.play_tracks != '' && env.STORE_RELEASE_ANDROID_FLOW == 'fud-ai' &&
           steps.play.outputs.play_upload_needed == 'true' && inputs.whats_new == 'true'
         uses: r0adkll/upload-google-play@e738b9dd8f2476ea806d921b64aacd24f34515a5 # v1.1.5
         with:

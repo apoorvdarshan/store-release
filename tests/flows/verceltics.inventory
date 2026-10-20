@@ -1,0 +1,7 @@
+# verceltics: upstream tests (tests/parity/upstream_verceltics_*/) that tests/flows/test_upstream.py
+# does not run against the ported flow, one per line: <test id>  <why>. Every other test of the
+# app's own suite runs unchanged against store_release/flows/verceltics/.
+test_android_release.AndroidCatalogTests.test_catalog_matches_the_android_billing_ids  reads the app's committed store files or source (listing, screenshots, catalog against the app); the app's Store checks run these through `ios pr-checks` / `catalog check`
+test_android_release.PlayReadTests.test_commands_read_through_a_deleted_throwaway_edit  replaces sys.modules['play_listing'] with a fake publisher, a name the ported package does not import it by (store_release.flows.verceltics.play_listing); tests/unit/test_flows.py runs check-version-code and play-state against a fake publisher instead
+test_ios_release.CatalogTests.test_repository_catalog_matches_storekit_and_android_billing  reads the app's committed store files or source (listing, screenshots, catalog against the app); the app's Store checks run these through `ios pr-checks` / `catalog check`
+test_ios_release.CreativeGateTests.test_every_ios_switch_is_printed_and_documented  reads the app's store/gates.env.example, which store-release's own gates.env.example and docs/switches.md replace (tests/workflows/test_docs.py)
