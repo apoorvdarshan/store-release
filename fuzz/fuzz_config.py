@@ -30,11 +30,11 @@ import tomllib
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import common  # noqa: E402
+import common  # noqa: E402  (puts the repository root on sys.path)
 
 import atheris  # noqa: E402
 
-with atheris.instrument_imports():
+with atheris.instrument_imports(include=["store_release"]):
     from store_release import config, context, paths
 
 WORK = Path(tempfile.mkdtemp(prefix="fuzz-config-")).resolve()
@@ -75,16 +75,16 @@ KEYS = key_names()
 def new_value(fdp: atheris.FuzzedDataProvider, old: object, depth: int = 0) -> object:
     kind = fdp.ConsumeIntInRange(0, 11)
     if kind == 0:
-        return fdp.PickValueInList(TRICKY)
+        return common.pick(fdp, TRICKY)
     if kind == 1:
         return fdp.ConsumeUnicodeNoSurrogates(fdp.ConsumeIntInRange(0, 20))
     if kind == 2 and isinstance(old, str):
-        fragment = fdp.PickValueInList(TRICKY)
+        fragment = common.pick(fdp, TRICKY)
         return fragment + old if fdp.ConsumeBool() else old + fragment
     if kind == 3:
-        return fdp.PickValueInList((0, 1, -1, 2, 10, 2**63 - 1, -(2**63)))
+        return common.pick(fdp, (0, 1, -1, 2, 10, 2**63 - 1, -(2**63)))
     if kind == 4:
-        return fdp.PickValueInList((0.0, 1.5, float("inf"), float("nan")))
+        return common.pick(fdp, (0.0, 1.5, float("inf"), float("nan")))
     if kind == 5:
         return fdp.ConsumeBool()
     if kind == 6:
@@ -92,12 +92,12 @@ def new_value(fdp: atheris.FuzzedDataProvider, old: object, depth: int = 0) -> o
     if kind == 7 and depth < 2:
         return [new_value(fdp, None, depth + 1) for _ in range(fdp.ConsumeIntInRange(0, 3))]
     if kind == 8 and depth < 2:
-        return {fdp.PickValueInList(KEYS): new_value(fdp, None, depth + 1) for _ in range(fdp.ConsumeIntInRange(0, 2))}
+        return {common.pick(fdp, KEYS): new_value(fdp, None, depth + 1) for _ in range(fdp.ConsumeIntInRange(0, 2))}
     if kind == 9:
-        return [fdp.PickValueInList(TRICKY) for _ in range(fdp.ConsumeIntInRange(0, 3))]
+        return [common.pick(fdp, TRICKY) for _ in range(fdp.ConsumeIntInRange(0, 3))]
     if kind == 10 and isinstance(old, list):
-        return old + [copy.deepcopy(fdp.PickValueInList(old))] if old else []
-    return fdp.PickValueInList(TRICKY)
+        return old + [copy.deepcopy(common.pick(fdp, old))] if old else []
+    return common.pick(fdp, TRICKY)
 
 
 def mutate(fdp: atheris.FuzzedDataProvider, data: dict) -> None:
@@ -120,15 +120,15 @@ def mutate(fdp: atheris.FuzzedDataProvider, data: dict) -> None:
     walk(data)
     operation = fdp.ConsumeIntInRange(0, 3)
     if operation == 0 and slots:
-        container, key = fdp.PickValueInList(slots)
+        container, key = common.pick(fdp, slots)
         del container[key]  # type: ignore[arg-type]
     elif operation == 1 and slots:
-        container, key = fdp.PickValueInList(slots)
+        container, key = common.pick(fdp, slots)
         container[key] = new_value(fdp, container[key])  # type: ignore[index]
     else:
-        target = fdp.PickValueInList(containers)
+        target = common.pick(fdp, containers)
         if isinstance(target, dict):
-            target[fdp.PickValueInList(KEYS)] = new_value(fdp, None)
+            target[common.pick(fdp, KEYS)] = new_value(fdp, None)
         else:
             target.append(new_value(fdp, None))
 
@@ -159,7 +159,7 @@ def check_accepted(parsed: config.Config) -> None:
 
 def check_values(fdp: atheris.FuzzedDataProvider) -> None:
     if fdp.ConsumeBool():
-        value = "".join(fdp.PickValueInList(TRICKY + ("a", "b/", "x.png")) for _ in range(fdp.ConsumeIntInRange(1, 4)))
+        value = "".join(common.pick(fdp, TRICKY + ("a", "b/", "x.png")) for _ in range(fdp.ConsumeIntInRange(1, 4)))
     else:
         value = fdp.ConsumeUnicodeNoSurrogates(fdp.ConsumeIntInRange(0, 40))
     which = fdp.ConsumeIntInRange(0, 3)
@@ -179,7 +179,7 @@ def check_values(fdp: atheris.FuzzedDataProvider) -> None:
             assert value.startswith(("/", "!/")) and not any(ch in value for ch in "\n\r\x00"), value
             assert ".." not in value.lstrip("!").split("/"), value
         else:
-            allowed = fdp.PickValueInList((config.IOS_TITLE_PLACEHOLDERS, config.ASSET_NAME_PLACEHOLDERS))
+            allowed = common.pick(fdp, (config.IOS_TITLE_PLACEHOLDERS, config.ASSET_NAME_PLACEHOLDERS))
             config.check_template(value, "k", allowed)
             config.render_template(value, **{name: "1" for name in allowed})
     except config.ConfigError:
@@ -202,7 +202,7 @@ def TestOneInput(data: bytes) -> None:
     if mode == 2:
         check_values(fdp)
         return
-    document = copy.deepcopy(fdp.PickValueInList(BASES))
+    document = copy.deepcopy(common.pick(fdp, BASES))
     for _ in range(fdp.ConsumeIntInRange(0, 4)):
         mutate(fdp, document)
     try:

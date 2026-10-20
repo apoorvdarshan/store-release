@@ -22,11 +22,11 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import common  # noqa: E402,F401  (puts the repository root on sys.path)
+import common  # noqa: E402  (puts the repository root on sys.path)
 
 import atheris  # noqa: E402
 
-with atheris.instrument_imports():
+with atheris.instrument_imports(include=["store_release"]):
     from store_release import release_notes
 
 release_notes.NOTES_RELPATH = "RELEASE_NOTES.md"
@@ -57,14 +57,14 @@ def structured(fdp: atheris.FuzzedDataProvider) -> tuple[str, str]:
     for _ in range(fdp.ConsumeIntInRange(0, 12)):
         kind = fdp.ConsumeIntInRange(0, 3)
         if kind == 0:
-            pad_left, pad_right = fdp.PickValueInList(PADDING), fdp.PickValueInList(PADDING)
-            lines.append(f"## {pad_left}{fdp.PickValueInList(tags)}{pad_right}")
+            pad_left, pad_right = common.pick(fdp, PADDING), common.pick(fdp, PADDING)
+            lines.append(f"## {pad_left}{common.pick(fdp, tags)}{pad_right}")
         elif kind == 1:
-            lines.append(fdp.PickValueInList(FILLER))
+            lines.append(common.pick(fdp, FILLER))
         else:
             lines.append(fdp.ConsumeUnicodeNoSurrogates(fdp.ConsumeIntInRange(0, 24)))
-    separator = fdp.PickValueInList(("\n", "\r\n", "\n\n", "\r"))
-    return fdp.PickValueInList(tags), separator.join(lines)
+    separator = common.pick(fdp, ("\n", "\r\n", "\n\n", "\r"))
+    return common.pick(fdp, tags), separator.join(lines)
 
 
 def TestOneInput(data: bytes) -> None:

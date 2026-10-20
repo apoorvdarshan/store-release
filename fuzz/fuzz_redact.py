@@ -24,11 +24,11 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import common  # noqa: E402,F401  (puts the repository root on sys.path)
+import common  # noqa: E402  (puts the repository root on sys.path)
 
 import atheris  # noqa: E402
 
-with atheris.instrument_imports():
+with atheris.instrument_imports(include=["store_release"]):
     from store_release import redact
 
 ID_ALPHABET = string.ascii_letters + string.digits + "-"
@@ -44,7 +44,7 @@ NAME_JOINS = (("d", "id"), ("a", "as", "asc"))
 
 
 def make_id(fdp: atheris.FuzzedDataProvider, low: int, high: int) -> str:
-    return "".join(fdp.PickValueInList(ID_ALPHABET) for _ in range(fdp.ConsumeIntInRange(low, high)))
+    return "".join(common.pick(fdp, ID_ALPHABET) for _ in range(fdp.ConsumeIntInRange(low, high)))
 
 
 def recase(fdp: atheris.FuzzedDataProvider, value: str) -> str:
@@ -59,13 +59,13 @@ def content(fdp: atheris.FuzzedDataProvider, ids: list[str]) -> bytes:
         if kind == 0:
             parts.append(fdp.ConsumeBytes(fdp.ConsumeIntInRange(0, 32)))
         elif kind == 1:
-            parts.append(recase(fdp, fdp.PickValueInList(ids)).encode(fdp.PickValueInList(ENCODINGS)))
+            parts.append(recase(fdp, common.pick(fdp, ids)).encode(common.pick(fdp, ENCODINGS)))
         elif kind == 2:
-            value = fdp.PickValueInList(ids)
+            value = common.pick(fdp, ids)
             cut = fdp.ConsumeIntInRange(0, len(value))
             parts.append(value[:cut].encode() if fdp.ConsumeBool() else value[cut:].encode())
         elif kind == 3:
-            parts.append(fdp.PickValueInList(list(redact.PLACEHOLDERS.values())))
+            parts.append(common.pick(fdp, list(redact.PLACEHOLDERS.values())))
         else:
             parts.append(b"\x00" * fdp.ConsumeIntInRange(0, 3))
     return b"".join(parts)
@@ -96,11 +96,11 @@ def TestOneInput(data: bytes) -> None:
     folder = WORK / "logs"
     shutil.rmtree(folder, ignore_errors=True)
     # Names may hold an ID too (an archive or log named after the key).
-    nested = "nested-" + recase(fdp, fdp.PickValueInList(ids)) if fdp.ConsumeBool() else "nested"
+    nested = "nested-" + recase(fdp, common.pick(fdp, ids)) if fdp.ConsumeBool() else "nested"
     (folder / nested).mkdir(parents=True)
     OUTSIDE.write_bytes(files[0])
     for i, raw in enumerate(files):
-        name = f"log{i}-{recase(fdp, fdp.PickValueInList(ids))}.txt" if fdp.ConsumeBool() else f"log{i}.txt"
+        name = f"log{i}-{recase(fdp, common.pick(fdp, ids))}.txt" if fdp.ConsumeBool() else f"log{i}.txt"
         (folder / (nested if i % 2 else "") / name).write_bytes(raw)
     link = folder / "link.txt"
     link.symlink_to(OUTSIDE)

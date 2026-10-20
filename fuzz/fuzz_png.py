@@ -27,11 +27,11 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import common  # noqa: E402
+import common  # noqa: E402  (puts the repository root on sys.path)
 
 import atheris  # noqa: E402
 
-with atheris.instrument_imports():
+with atheris.instrument_imports(include=["store_release"]):
     from store_release import screenshots
     from store_release.ios import asc
 
@@ -69,7 +69,7 @@ def check_any_bytes(raw: bytes) -> None:
 
 def ancillary(fdp: atheris.FuzzedDataProvider) -> tuple[bytes, bytes]:
     """A valid ancillary chunk that may precede PLTE and IDAT (zzZz is an unknown one)."""
-    kind = fdp.PickValueInList((b"tEXt", b"gAMA", b"sRGB", b"pHYs", b"cICP", b"zzZz"))
+    kind = common.pick(fdp, (b"tEXt", b"gAMA", b"sRGB", b"pHYs", b"cICP", b"zzZz"))
     if kind == b"tEXt":
         data = b"Comment\x00" + fdp.ConsumeBytes(fdp.ConsumeIntInRange(0, 16)).replace(b"\x00", b"")
     elif kind == b"gAMA":
@@ -89,8 +89,8 @@ def built_png(fdp: atheris.FuzzedDataProvider) -> tuple[bytes, int, int, bool]:
     """A well-formed PNG: every colour type and bit depth, palette indices in range, tRNS within spec."""
     width = fdp.ConsumeIntInRange(1, 40)
     height = fdp.ConsumeIntInRange(1, 40)
-    colour_type = fdp.PickValueInList(sorted(common.PNG_DEPTHS))
-    bit_depth = fdp.PickValueInList(common.PNG_DEPTHS[colour_type])
+    colour_type = common.pick(fdp, sorted(common.PNG_DEPTHS))
+    bit_depth = common.pick(fdp, common.PNG_DEPTHS[colour_type])
     palette = 2 ** min(bit_depth, 8)
     trns = None
     if colour_type in (0, 2, 3) and fdp.ConsumeBool():

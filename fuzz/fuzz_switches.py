@@ -24,11 +24,11 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import common  # noqa: E402,F401  (puts the repository root on sys.path)
+import common  # noqa: E402  (puts the repository root on sys.path)
 
 import atheris  # noqa: E402
 
-with atheris.instrument_imports():
+with atheris.instrument_imports(include=["store_release"]):
     from store_release import switches
     from store_release.android import release as android_release
     from store_release.ios import release as ios_release
@@ -54,7 +54,7 @@ def raw_value(fdp: atheris.FuzzedDataProvider) -> str | None:
         return None
     if choice == 1:
         return fdp.ConsumeUnicodeNoSurrogates(fdp.ConsumeIntInRange(0, 10))
-    return fdp.PickValueInList(VALUES)
+    return common.pick(fdp, VALUES)
 
 
 def expected(raw: str | None) -> bool | None:
@@ -98,11 +98,11 @@ def check_ios(fdp: atheris.FuzzedDataProvider) -> None:
     env = environment(fdp, names)
     for spec in (ios_release.POLL_SECONDS, ios_release.WAIT_MINUTES):
         if fdp.ConsumeBool():
-            env[spec[0]] = fdp.PickValueInList(NUMBERS)
-    event = fdp.PickValueInList(EVENTS)
-    version = fdp.PickValueInList(VERSIONS)
-    ref = f"ios-v{version}" if fdp.ConsumeBool() else fdp.PickValueInList(IOS_REFS)
-    override = fdp.PickValueInList(("",) + VERSIONS)
+            env[spec[0]] = common.pick(fdp, NUMBERS)
+    event = common.pick(fdp, EVENTS)
+    version = common.pick(fdp, VERSIONS)
+    ref = f"ios-v{version}" if fdp.ConsumeBool() else common.pick(fdp, IOS_REFS)
+    override = common.pick(fdp, ("",) + VERSIONS)
     try:
         gates = ios_release.resolve_gates(env, event=event, ref_name=ref, marketing_version=version,
                                           validation_version=override)
@@ -134,9 +134,9 @@ def check_ios(fdp: atheris.FuzzedDataProvider) -> None:
 def check_android(fdp: atheris.FuzzedDataProvider) -> None:
     names = [android_release.MASTER] + [name for name, _ in android_release.OPERATION_SWITCHES]
     env = environment(fdp, names)
-    event = fdp.PickValueInList(EVENTS)
-    version = fdp.PickValueInList(VERSIONS)
-    ref = f"android-v{version}" if fdp.ConsumeBool() else fdp.PickValueInList(ANDROID_REFS)
+    event = common.pick(fdp, EVENTS)
+    version = common.pick(fdp, VERSIONS)
+    ref = f"android-v{version}" if fdp.ConsumeBool() else common.pick(fdp, ANDROID_REFS)
     try:
         gates = android_release.resolve_gates(env, event=event, ref_name=ref, version_name=version)
     except android_release.ReleaseError:
@@ -160,7 +160,7 @@ def check_android(fdp: atheris.FuzzedDataProvider) -> None:
 
 def TestOneInput(data: bytes) -> None:
     fdp = atheris.FuzzedDataProvider(data)
-    check_readers(fdp.PickValueInList(switches.GATES["ios"] + switches.GATES["android"]), raw_value(fdp))
+    check_readers(common.pick(fdp, switches.GATES["ios"] + switches.GATES["android"]), raw_value(fdp))
     if fdp.ConsumeBool():
         check_ios(fdp)
     else:

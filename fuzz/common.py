@@ -21,6 +21,11 @@ PNG_DEPTHS = {0: (1, 2, 4, 8, 16), 2: (8, 16), 3: (1, 2, 4, 8), 4: (8, 16), 6: (
 PNG_CHANNELS = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}
 
 
+def pick(fdp, values):
+    """One item of any non-empty sequence (atheris's PickValueInList takes lists only)."""
+    return values[fdp.ConsumeIntInRange(0, len(values) - 1)]
+
+
 def png_chunk(kind: bytes, data: bytes) -> bytes:
     """One PNG chunk: length, type, data and the CRC over type and data."""
     return len(data).to_bytes(4, "big") + kind + data + zlib.crc32(kind + data).to_bytes(4, "big")
