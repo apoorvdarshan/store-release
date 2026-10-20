@@ -7,13 +7,16 @@ import io
 import shutil
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+import urllib.error
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 import yaml
 
 from store_release import __version__, callers, config
 from support import apps as support_apps
+from support.tag_fakes import TagApi
 
 support_apps.configure_fud_ai_defaults()
 
@@ -107,12 +110,19 @@ class PullRequestCheckTests(unittest.TestCase):
         self.cfg = fud_ai()
         self.env = {"TOOL_SHA": SHA, "TOOL_REPOSITORY": "apoorvdarshan/store-release",
                     "GITHUB_REPOSITORY": "apoorvdarshan/fud-ai"}
+        self.tags = TagApi({f"v{__version__}": SHA})
         for platform, name in FILES.items():
             (self.workflows / name).write_text(render(platform, sha=SHA, version=__version__))
 
     def check(self) -> None:
         with redirect_stdout(io.StringIO()):
-            callers.pr_check(self.cfg, self.root, environ=self.env)
+            callers.pr_check(self.cfg, self.root, environ=self.env, opener=self.tags)
+
+    def pins(self) -> str:
+        out = io.StringIO()
+        with redirect_stdout(out):
+            callers.pins_check(self.root, environ=self.env, opener=self.tags)
+        return out.getvalue()
 
     def fails(self, fragment: str) -> None:
         with self.assertRaises(callers.CallerError) as caught:
@@ -121,8 +131,23 @@ class PullRequestCheckTests(unittest.TestCase):
 
     def test_the_rendered_callers_pass(self) -> None:
         self.check()
-        with redirect_stdout(io.StringIO()):
-            callers.pins_check(self.root, environ=self.env)
+        self.assertIn(f"the v{__version__} tag points at {SHA}", self.pins())
+
+    def test_the_release_tag_must_point_at_the_pin(self) -> None:
+        cases = {
+            "untagged": (TagApi({}), f"has no release tag v{__version__}"),
+            "another commit": (TagApi({f"v{__version__}": ZERO}), f"v{__version__} is {ZERO}, not the pinned {SHA}"),
+            "unreadable": (TagApi(error=urllib.error.URLError("offline")), "could not read"),
+        }
+        for name, (tags, fragment) in cases.items():
+            self.tags = tags
+            with self.subTest(case=name, check="pr"):
+                self.fails(fragment)
+            with self.subTest(case=name, check="pins"), self.assertRaisesRegex(callers.CallerError, fragment):
+                self.pins()
+        self.tags = TagApi({f"v{__version__}": SHA}, annotated=True)
+        self.check()
+        self.pins()
 
     def test_every_single_key_change_is_reported(self) -> None:
         for platform, name in FILES.items():
@@ -173,12 +198,13 @@ class PullRequestCheckTests(unittest.TestCase):
         other = self.workflows / "other.yml"
         other.write_text("jobs:\n  x:\n    uses: apoorvdarshan/store-release/.github/workflows/checks.yml"
                          f"@{'1' * 40} # v{__version__}\n")
-        with redirect_stdout(io.StringIO()), self.assertRaisesRegex(callers.CallerError, "other.yml line 3"):
-            callers.pins_check(self.root, environ=self.env)
+        with self.assertRaisesRegex(callers.CallerError, "other.yml line 3"):
+            self.pins()
         other.write_text("jobs:\n  x:\n    uses: apoorvdarshan/store-release/.github/workflows/checks.yml"
                          f"@{SHA} # v0.0.9\n")
-        with redirect_stdout(io.StringIO()), self.assertRaises(callers.CallerError):
-            callers.pins_check(self.root, environ=self.env)
+        with self.assertRaises(callers.CallerError):
+            self.pins()
+        self.assertEqual(self.tags.requests, [], "the tag is read only once the pins agree")
 
     def test_the_on_key_is_normalized(self) -> None:
         data = yaml.safe_load("on:\n  push: {}\n")
@@ -197,7 +223,40 @@ class ExampleCopiesTests(unittest.TestCase):
             env = {"TOOL_SHA": SHA, "TOOL_REPOSITORY": "apoorvdarshan/store-release",
                    "GITHUB_REPOSITORY": "apoorvdarshan/fud-ai"}
             with redirect_stdout(io.StringIO()):
-                callers.pr_check(fud_ai(), root, environ=env)
+                callers.pr_check(fud_ai(), root, environ=env, opener=TagApi({f"v{__version__}": SHA}))
+
+
+class RenderCommandTests(unittest.TestCase):
+    """callers render renders only a release tag's commit, unless --allow-untagged (store-release's CI)."""
+
+    def run_render(self, *extra: str, tags: TagApi) -> tuple[int, str, str]:
+        out, err = io.StringIO(), io.StringIO()
+        argv = ["--platform", "checks", "--sha", SHA, "--version", "0.1.0", *extra]
+        with mock.patch("urllib.request.urlopen", tags), redirect_stdout(out), redirect_stderr(err):
+            try:
+                code = callers.render_main(fud_ai(), argv)
+            except callers.CallerError as exc:
+                return 1, out.getvalue(), str(exc)
+        return code, out.getvalue(), err.getvalue()
+
+    def test_a_tagged_commit_renders(self) -> None:
+        code, out, err = self.run_render(tags=TagApi({"v0.1.0": SHA}))
+        self.assertEqual(code, 0)
+        self.assertIn(f"checks.yml@{SHA} # v0.1.0", out)
+        self.assertIn(f"the v0.1.0 tag points at {SHA}", err)
+
+    def test_an_untagged_commit_needs_allow_untagged(self) -> None:
+        for tags, fragment in ((TagApi({}), "has no release tag v0.1.0"),
+                               (TagApi({"v0.1.0": ZERO}), f"v0.1.0 is {ZERO}, not the pinned {SHA}")):
+            with self.subTest(fragment=fragment):
+                code, out, err = self.run_render(tags=tags)
+                self.assertEqual((code, out), (1, ""))
+                self.assertIn(fragment, err)
+        tags = TagApi({})
+        code, out, _ = self.run_render("--allow-untagged", tags=tags)
+        self.assertEqual(code, 0)
+        self.assertIn(f"checks.yml@{SHA} # v0.1.0", out)
+        self.assertEqual(tags.requests, [])
 
 
 if __name__ == "__main__":

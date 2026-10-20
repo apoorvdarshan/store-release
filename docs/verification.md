@@ -40,9 +40,18 @@ Info.plist for its export compliance answer.
 
 ## store-release itself
 
-- Apps pin store-release by full commit SHA with a `# vX.Y.Z` comment; `pins check`
-  and `caller check` fail when a pin and its comment disagree with the version that
-  runs.
+- Apps pin store-release by full commit SHA with a `# vX.Y.Z` comment. In Store
+  checks, `pins check` and `caller check --pr` fail unless every pin is the same
+  commit, its comment names the version that runs, and the `vX.Y.Z` tag points at that
+  commit, so a pin to an untagged `main` commit with a plausible comment fails. In
+  release runs, `caller check --runtime` only warns about the tag.
+- Those checks run inside the code the app pinned, so they cannot catch a hostile pin:
+  a commit pushed to a fork of store-release also resolves through `uses:` by SHA, and
+  its code could skip them. Catch that outside the pinned code: merge only pin bumps
+  that Dependabot opened (it resolves `vX.Y.Z` in apoorvdarshan/store-release itself),
+  or check the pin in the app's own CI, for example that
+  `git ls-remote https://github.com/apoorvdarshan/store-release refs/tags/vX.Y.Z`
+  prints the pinned SHA, or run zizmor's `impostor-commit` audit.
 - Release tags `vX.Y.Z` are created only by `release.yml`, after every required
   check passed on that commit, and never move: releases are immutable, and the
   "Release tags" ruleset (created right after the first tag,

@@ -132,8 +132,9 @@ jobs:
           "$RUNNER_TEMP/actionlint" -color
           -ignore 'property "workflow_(sha|repository)" is not defined in object type'
       # The callers live in app repositories: render fud-ai's into a scratch repository with
-      # stub local workflows, so their local references resolve. actionlint 1.7.12 does not
-      # know concurrency.queue yet (documented); drop the ignore once it does.
+      # stub local workflows, so their local references resolve. This commit is not a release
+      # tag's, hence --allow-untagged. actionlint 1.7.12 does not know concurrency.queue yet
+      # (documented); drop the ignore once it does.
       - name: Lint the rendered fud-ai callers
         run: |
           set -euo pipefail
@@ -144,7 +145,7 @@ jobs:
             case "$platform" in checks) name=store-checks.yml ;; *) name="$platform-release.yml" ;; esac
             python3 -I -u run.py --app-root examples/fud-ai --config store-release.toml callers render \
               --platform "$platform" --sha "$GITHUB_SHA" --version 0.1.0 --app-repository apoorvdarshan/fud-ai \
-              --config-in-app store/store-release.toml --out "$repo/.github/workflows/$name"
+              --config-in-app store/store-release.toml --allow-untagged --out "$repo/.github/workflows/$name"
           done
           for stub in ios-tests quality; do
             printf 'name: %s\non:\n  workflow_call:\npermissions:\n  contents: read\njobs:\n  stub:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo stub\n' \

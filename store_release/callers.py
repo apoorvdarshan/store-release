@@ -2,22 +2,35 @@
 
   callers render     the exact text of ios-release.yml, android-release.yml and store-checks.yml
                      for this config, store-release commit and version. It is the only source
-                     of caller text: examples/ and every app's callers come from it.
+                     of caller text: examples/ and every app's callers come from it. It refuses
+                     a commit the version's release tag does not point at (--allow-untagged
+                     is for store-release's own CI).
   caller check --pr  (PyYAML) the app's callers parse to exactly the rendered ones (comments
-                     aside), and every store-release ref is this commit with its version comment.
+                     aside), every store-release ref is this commit with its version comment,
+                     and the v<version> release tag points at this commit.
   caller check --runtime
                      (stdlib, in prepare/gates) every store-release ref in the running caller is
-                     this job's commit, and its concurrency is exactly the release queue.
-  pins check         every store-release ref in any app workflow is this commit and version.
+                     this job's commit, and its concurrency is exactly the release queue. A
+                     release tag that does not match (or cannot be read) is only a warning: a
+                     release never depends on mutable remote state.
+  pins check         every store-release ref in any app workflow is this commit and version,
+                     and the v<version> release tag points at this commit.
+
+The tag checks run inside the pinned code, so they catch honest mistakes (a pin to an
+untagged commit, a hand-edited version comment), not a hostile pin: a commit from a fork
+also resolves through `uses:` by SHA and could skip them (docs/verification.md).
 """
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Mapping
 
 from store_release import __version__
 from store_release.config import DEFAULT_CONFIG, Config, ConfigError, render_template
@@ -34,10 +47,82 @@ SIGNING_SECRETS = ("IOS_DEV_SIGNING_P12_BASE64", "IOS_DEV_SIGNING_P12_PASSWORD")
 KEYSTORE_SECRETS = ("ANDROID_KEYSTORE_BASE64", "ANDROID_KEYSTORE_PASSWORD", "ANDROID_KEY_ALIAS", "ANDROID_KEY_PASSWORD")
 PLAY_SECRET = "PLAY_SERVICE_ACCOUNT_JSON"
 GATE_LABELS = {"ios-tests": "the iOS tests", "quality": "quality checks"}
+TAG_LOOKUP_TIMEOUT = 30
+# An annotated tag may point at another tag; follow at most this many before giving up.
+MAX_TAG_DEPTH = 5
 
 
 class CallerError(ConfigError):
     """A caller workflow differs from what this store-release version renders, or is pinned wrongly."""
+
+
+# --- release tags ----------------------------------------------------------------
+
+
+def release_tag_commit(repository: str, version: str, *, environ: Mapping[str, str] | None = None,
+                       opener: Callable[..., Any] | None = None) -> str | None:
+    """The commit store-release's release tag v<version> points at (annotated tags peeled), or None
+    when the tag does not exist.
+
+    Reads GET /repos/<repository>/git/ref/tags/v<version> (and /git/tags/<sha> for an annotated
+    tag) from GITHUB_API_URL, with GH_TOKEN in the Authorization header when it is set. A 404
+    means there is no such tag; any other failure raises CallerError, so callers fail closed.
+    """
+    env = os.environ if environ is None else environ
+    opener = opener or urllib.request.urlopen
+    if not REPOSITORY.fullmatch(repository or ""):
+        raise CallerError(f"the store-release repository {repository!r} is not owner/name")
+    if not VERSION.fullmatch(version or ""):
+        raise CallerError(f"version {version!r} must look like 0.1.0")
+    api = (env.get("GITHUB_API_URL") or "https://api.github.com").rstrip("/")
+    headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
+    if env.get("GH_TOKEN"):
+        headers["Authorization"] = f"Bearer {env['GH_TOKEN']}"
+    label = f"{repository} tag v{version}"
+
+    def get(path: str) -> dict | None:
+        request = urllib.request.Request(f"{api}/repos/{repository}/{path}", headers=headers)
+        try:
+            with opener(request, timeout=TAG_LOOKUP_TIMEOUT) as response:
+                data = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                return None
+            raise CallerError(f"could not read the {label} (HTTP {exc.code}); re-run") from None
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            raise CallerError(f"could not read the {label} ({exc}); re-run") from None
+        if not isinstance(data, dict):
+            raise CallerError(f"could not read the {label}: unexpected response; re-run")
+        return data
+
+    ref = get(f"git/ref/tags/v{version}")
+    if ref is None:
+        return None
+    target = ref.get("object") if isinstance(ref.get("object"), dict) else {}
+    for _ in range(MAX_TAG_DEPTH):
+        kind, sha = target.get("type"), target.get("sha")
+        if not isinstance(sha, str) or not SHA40.fullmatch(sha):
+            break
+        if kind == "commit":
+            return sha
+        if kind != "tag":
+            break
+        tag = get(f"git/tags/{sha}")
+        target = tag.get("object") if tag is not None and isinstance(tag.get("object"), dict) else {}
+    raise CallerError(f"the {label} does not resolve to a commit")
+
+
+def check_release_tag(sha: str, repository: str, *, environ: Mapping[str, str] | None = None,
+                      opener: Callable[..., Any] | None = None, version: str = __version__) -> str:
+    """Fail unless store-release's v<version> tag points at sha, the commit an app pinned."""
+    commit = release_tag_commit(repository, version, environ=environ, opener=opener)
+    if commit is None:
+        raise CallerError(f"{repository} has no release tag v{version}: pin the commit of a store-release "
+                          f"release, never an untagged commit ({sha})")
+    if commit != sha:
+        raise CallerError(f"{repository} v{version} is {commit}, not the pinned {sha}: pin the commit the "
+                          f"v{version} tag points at")
+    return f"the v{version} tag points at {sha}"
 
 
 def _uses(repository: str, workflow: str, sha: str, version: str) -> str:
@@ -435,10 +520,14 @@ def render_main(config: Config, argv: list[str], *, config_path: str = DEFAULT_C
     parser.add_argument("--app-repository", default=os.environ.get("GITHUB_REPOSITORY", ""))
     parser.add_argument("--config-in-app", default=config_path,
                         help="the config path the app's callers name (default: --config)")
+    parser.add_argument("--allow-untagged", action="store_true",
+                        help="render a commit the --version tag does not point at (store-release's own CI only)")
     parser.add_argument("--out", type=Path)
     args = parser.parse_args(argv)
     text = render(config, args.platform, sha=args.sha, version=args.version, repository=args.repository,
                   app_repository=args.app_repository, config_path=args.config_in_app)
+    if not args.allow_untagged:
+        print(check_release_tag(args.sha, args.repository, version=args.version), file=sys.stderr)
     if args.out:
         args.out.write_text(text, encoding="utf-8")
         print(f"rendered {args.out}")
@@ -492,7 +581,8 @@ def concurrency_lines(text: str) -> list[str]:
     return found
 
 
-def runtime_check(app_root: Path, platform: str, *, environ: dict[str, str] | None = None) -> None:
+def runtime_check(app_root: Path, platform: str, *, environ: dict[str, str] | None = None,
+                  opener: Callable[..., Any] | None = None) -> None:
     from store_release import paths  # noqa: PLC0415
 
     env = dict(os.environ if environ is None else environ)
@@ -516,6 +606,11 @@ def runtime_check(app_root: Path, platform: str, *, environ: dict[str, str] | No
         raise CallerError(f"{relative} must keep exactly this concurrency (release runs queue, never cancel): "
                           f"{expected}; found {found}")
     print(f"{relative}: {len(refs)} store-release ref(s) pinned to {sha}; release concurrency queues")
+    # A warning only, like a yanked version: Store checks fail on it, a release never depends on it.
+    try:
+        print(check_release_tag(sha, repository, environ=env, opener=opener))
+    except CallerError as exc:
+        print(f"::warning title=store-release pin::{exc} (Store checks fail on this; this run goes on)")
 
 
 def _normalize(value: Any) -> Any:
@@ -555,7 +650,7 @@ def _job_names(document: Any) -> list[str]:
 
 
 def pr_check(config: Config, app_root: Path, *, environ: dict[str, str] | None = None,
-             config_path: str = DEFAULT_CONFIG) -> None:
+             config_path: str = DEFAULT_CONFIG, opener: Callable[..., Any] | None = None) -> None:
     import yaml  # noqa: PLC0415 - pull request checks only (requirements-checks.txt)
 
     env = dict(os.environ if environ is None else environ)
@@ -587,10 +682,13 @@ def pr_check(config: Config, app_root: Path, *, environ: dict[str, str] | None =
     if problems:
         raise CallerError("the caller workflows differ from what store-release v"
                           f"{__version__} renders:\n  " + "\n  ".join(problems))
-    print(f"callers match store-release v{__version__} ({', '.join(CALLER_FILES[p] for p in [*platforms, 'checks'])})")
+    tag = check_release_tag(sha, repository, environ=env, opener=opener)
+    print(f"callers match store-release v{__version__} ({', '.join(CALLER_FILES[p] for p in [*platforms, 'checks'])}); "
+          f"{tag}")
 
 
-def pins_check(app_root: Path, *, environ: dict[str, str] | None = None) -> None:
+def pins_check(app_root: Path, *, environ: dict[str, str] | None = None,
+               opener: Callable[..., Any] | None = None) -> None:
     env = dict(os.environ if environ is None else environ)
     sha, repository = _tool_identity(env)
     workflows = app_root / ".github" / "workflows"
@@ -604,4 +702,5 @@ def pins_check(app_root: Path, *, environ: dict[str, str] | None = None) -> None
     if problems:
         raise CallerError(f"every {repository} pin must be @{sha} # v{__version__} (half-upgraded or "
                           "hand-edited):\n  " + "\n  ".join(problems))
-    print(f"{count} store-release pin(s) are {sha} # v{__version__}")
+    tag = check_release_tag(sha, repository, environ=env, opener=opener)
+    print(f"{count} store-release pin(s) are {sha} # v{__version__}; {tag}")

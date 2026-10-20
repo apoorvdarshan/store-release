@@ -24,6 +24,10 @@ Impact: release-path (the first release)
   differential parity suite against the vendored fud-ai scripts, workflow tests,
   and docs tests.
 - Fud AI's config and rendered callers in `examples/fud-ai/`.
+- Pin checks against the release tag: `pins check` and `caller check --pr` (Store
+  checks) fail unless store-release's `vX.Y.Z` tag points at the pinned commit,
+  `caller check --runtime` (prepare, gates) warns, and `callers render` refuses an
+  untagged commit unless `--allow-untagged` (store-release's own CI).
 - CI (`test (stdlib)`, `test (strict)`, `test (macos)`, `lint`, `workflows`, and the
   advisory `canary (fud-ai)` against fud-ai's real store files), CodeQL
   (`Analyze (python)`, `Analyze (actions)`), dependency review, Dependabot, the

@@ -5,10 +5,12 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from store_release import __version__, callers, config
 from support import apps as support_apps
 from support import clirun, trees
+from support.tag_fakes import TagApi
 
 support_apps.configure_fud_ai_defaults()
 
@@ -93,12 +95,16 @@ class ExampleAppTests(unittest.TestCase):
                          ["example-android-1.0-3.aab", "example-android-1.0-3.apk"])
 
     def test_callers_check(self) -> None:
-        env = dict(TOOL_SHA=SHA, TOOL_REPOSITORY="apoorvdarshan/store-release", GITHUB_REPOSITORY="someone/example")
-        result = self.run_cli("caller", "check", "--pr", **env)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        result = self.run_cli("caller", "check", "--runtime", "--platform", "ios", **env,
-                              GITHUB_WORKFLOW_REF="someone/example/.github/workflows/ios-release.yml@refs/tags/v1.0")
-        self.assertEqual(result.returncode, 0, result.stderr)
+        env = clirun.clean_env(TOOL_SHA=SHA, TOOL_REPOSITORY="apoorvdarshan/store-release",
+                               GITHUB_REPOSITORY="someone/example")
+        with mock.patch("urllib.request.urlopen", TagApi({f"v{__version__}": SHA})):
+            code, _, err = clirun.in_process(["--app-root", str(self.root), "caller", "check", "--pr"], env)
+            self.assertEqual(code, 0, err)
+            ref = "someone/example/.github/workflows/ios-release.yml@refs/tags/v1.0"
+            code, out, err = clirun.in_process(["--app-root", str(self.root), "caller", "check", "--runtime",
+                                                "--platform", "ios"], {**env, "GITHUB_WORKFLOW_REF": ref})
+            self.assertEqual(code, 0, err)
+            self.assertNotIn("::warning", out)
 
 
 if __name__ == "__main__":

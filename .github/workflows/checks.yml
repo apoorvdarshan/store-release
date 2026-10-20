@@ -120,8 +120,10 @@ jobs:
         env:
           STORE_UPLOAD_SCREENSHOTS: "true"
         run: python3 -I -u .store-release/run.py --app-root app screenshots stage --platform all --out "$RUNNER_TEMP/staged-for-upload"
+      # Also reads (read-only) which commit the pinned version's release tag points at.
       - name: Check the callers and their pins
         env:
+          GH_TOKEN: ${{ github.token }}
           TOOL_SHA: ${{ job.workflow_sha }}
           TOOL_REPOSITORY: ${{ job.workflow_repository }}
         run: |

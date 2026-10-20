@@ -127,16 +127,25 @@ name would satisfy it by accident); the caller check refuses them.
 
 - `callers render --platform ios|android|checks --sha SHA --version X.Y.Z
   --app-repository OWNER/REPO` writes a caller from the config; it is the only source
-  of caller text.
+  of caller text. It refuses a `SHA` that the `vX.Y.Z` tag does not point at;
+  `--allow-untagged` is for store-release's own CI, which renders its current commit.
 - `caller check --pr` (Store checks) compares each caller with the rendered one as
   YAML (comments do not count) and reports the differing keys; every store-release
-  reference must end in `@<sha> # v<version>`.
+  reference must end in `@<sha> # v<version>`, and store-release's `v<version>` tag
+  must point at `<sha>`.
 - `pins check` (Store checks): every store-release reference in every app workflow
-  is this version's SHA.
+  is this commit with this version's comment, and the `v<version>` tag points at
+  this commit.
 - `caller check --runtime` (prepare, gates): the running caller pins every
   store-release reference to this job's `job.workflow_sha`, and its concurrency is
   exactly `group: <platform>-release-${{ github.event_name == 'push' && 'release' ||
-  github.run_id }}`, `cancel-in-progress: false`, `queue: max`.
+  github.run_id }}`, `cancel-in-progress: false`, `queue: max`. A `v<version>` tag
+  that points elsewhere, is missing or cannot be read is only a warning here.
+- The tag checks read `GET /repos/apoorvdarshan/store-release/git/ref/tags/v<version>`
+  (annotated tags are followed to their commit) with the job's read-only
+  `GITHUB_TOKEN`. In Store checks a failed read fails the check; re-run it. They run
+  inside the pinned code, so they catch mistakes, not a hostile pin
+  ([verification.md](verification.md#store-release-itself)).
 - `yanked check`: a pinned version listed in [yanked.md](yanked.md) fails Store
   checks and is a warning in prepare/gates (a release never depends on mutable
   remote state).
