@@ -1,5 +1,8 @@
 # store-release
 
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/15750/badge)](https://www.bestpractices.dev/projects/15750)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/apoorvdarshan/store-release/badge)](https://scorecard.dev/viewer/?uri=github.com/apoorvdarshan/store-release)
+
 Reusable GitHub Actions workflows and Python tooling that build, sign and publish iOS
 and Android apps to App Store Connect and Google Play, pinned by commit SHA.
 
