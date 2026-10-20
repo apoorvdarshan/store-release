@@ -3,12 +3,14 @@ templates in examples/templates/, which are exactly what it writes for their ans
 from __future__ import annotations
 
 import io
+import os
 import re
 import tempfile
 import tomllib
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 from store_release import __version__, callers, cli, config, scaffold
 from support import apps as support_apps
@@ -27,8 +29,10 @@ ANDROID = ["--package", "com.example.myapp", "--upload-cert-sha256", CERT, "--ap
 
 
 def run_init(root: Path, *args: str, opener=None, ask=None) -> tuple[int, str, str]:
+    """init through the CLI (or scaffold.main with a fake tag API or prompt), outside any GitHub Actions run."""
     out, err = io.StringIO(), io.StringIO()
-    with redirect_stdout(out), redirect_stderr(err):
+    environ = {k: v for k, v in os.environ.items() if not k.startswith("GITHUB_")}
+    with mock.patch.dict(os.environ, environ, clear=True), redirect_stdout(out), redirect_stderr(err):
         if opener is None and ask is None:
             code = cli.main(["--app-root", str(root), "init", "--no-input", *args])
         else:
@@ -169,7 +173,8 @@ class InitTests(unittest.TestCase):
 
     def test_another_config_path_reaches_the_callers(self) -> None:
         out, err = io.StringIO(), io.StringIO()
-        with redirect_stdout(out), redirect_stderr(err):
+        environ = {k: v for k, v in os.environ.items() if not k.startswith("GITHUB_")}
+        with mock.patch.dict(os.environ, environ, clear=True), redirect_stdout(out), redirect_stderr(err):
             code = cli.main(["--app-root", str(self.root), "--config", "release/store.toml", "init", "--no-input",
                              "--platform", "ios", *IOS, "--sha", SHA, "--allow-untagged"])
         self.assertEqual(code, 0, err.getvalue())
