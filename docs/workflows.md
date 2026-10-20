@@ -41,7 +41,9 @@ and plans.
 | `checks.yml` | `checks` | ubuntu-latest | 15 | `config` | |
 
 `config` defaults to `store/store-release.toml`. Secrets per workflow:
-[secrets.md](secrets.md).
+[secrets.md](secrets.md). `checks.yml` runs the iOS and Android steps only for the
+platforms the config has (`config export --job checks` sets `STORE_RELEASE_HAS_IOS`
+and `STORE_RELEASE_HAS_ANDROID`), so an iOS-only or Android-only app passes it.
 
 ## How every job starts
 
@@ -94,7 +96,8 @@ same thing; the check is defence in depth against a hand-edited caller.
 - `permissions: contents: read` at the top, exactly one job with explicit
   `permissions`, `runs-on` and `timeout-minutes`, no `concurrency` (the callers own
   it), `defaults: run: shell: bash`.
-- Every third-party action is pinned to a full commit SHA with a `# vX.Y.Z` comment.
+- Every third-party action is pinned to a full commit SHA with a `# vX.Y.Z` comment,
+  and to the same pin in every file.
 - `${{ }}` never appears inside `run:`; inputs, outputs, variables and secrets reach
   shell only through `env:`. Secrets live in the `env:` of the steps that use them.
 - Python always runs as `python3 -I -u .store-release/run.py`; lock installs use
@@ -119,7 +122,8 @@ Check runs are named `<caller job> / <inner job>`: `prepare / prepare`,
 `build / build`, `wait-for-build / wait-for-build`, `app-store-connect /
 app-store-connect`, `github-release / github-release`, `store-plan / store-plan`,
 `gates / gates`, `release / release`, `checks / checks`, plus the plain
-`store-release` aggregator in Store checks. The app's own gate jobs keep their names.
+`store-release` aggregator in Store checks (`permissions: {}`: it only reads the
+checks job's result). The app's own gate jobs keep their names.
 No caller job may be named `web` or `android` (a plain job with a required check's
 name would satisfy it by accident); the caller check refuses them.
 

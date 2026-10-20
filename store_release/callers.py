@@ -484,6 +484,8 @@ def render_checks(config: Config, *, sha: str, version: str, repository: str = D
         "    if: ${{ always() }}",
         "    runs-on: ubuntu-latest",
         "    timeout-minutes: 5",
+        "    # It reads only the checks job's result: no token permission at all.",
+        "    permissions: {}",
         "    steps:",
         "      - name: Require the store checks to pass",
         "        env:",

@@ -72,6 +72,17 @@ class RenderTests(unittest.TestCase):
             for job in data["jobs"]:
                 self.assertNotIn(job, callers.FORBIDDEN_JOB_NAMES)
 
+    def test_every_rendered_job_declares_its_permissions(self) -> None:
+        example = config.load(EXAMPLES / "example" / "store-release.toml")
+        for cfg_name, cfg in (("fud-ai", fud_ai()), ("example", example)):
+            for platform in FILES:
+                jobs = yaml.safe_load(render(platform, cfg))["jobs"]
+                for job_id, job in jobs.items():
+                    with self.subTest(config=cfg_name, platform=platform, job=job_id):
+                        self.assertIn("permissions", job)
+        aggregator = yaml.safe_load(render("checks"))["jobs"]["store-release"]
+        self.assertEqual(aggregator["permissions"], {})
+
     def test_the_example_app_renders(self) -> None:
         example = config.load(EXAMPLES / "example" / "store-release.toml")
         ios = yaml.safe_load(render("ios", example))

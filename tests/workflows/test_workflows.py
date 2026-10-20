@@ -11,17 +11,11 @@ TOOL_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = TOOL_ROOT / ".github" / "workflows"
 ASC = ("APP_STORE_CONNECT_API_KEY_ID", "APP_STORE_CONNECT_ISSUER_ID", "APP_STORE_CONNECT_API_KEY_P8")
 KEYSTORE = ("ANDROID_KEYSTORE_BASE64", "ANDROID_KEYSTORE_PASSWORD", "ANDROID_KEY_ALIAS", "ANDROID_KEY_PASSWORD")
-PINS = {
-    "actions/checkout": ("3d3c42e5aac5ba805825da76410c181273ba90b1", "v7.0.1"),
-    "actions/setup-python": ("5fda3b95a4ea91299a34e894583c3862153e4b97", "v7.0.0"),
-    "actions/cache": ("55cc8345863c7cc4c66a329aec7e433d2d1c52a9", "v6.1.0"),
-    "actions/upload-artifact": ("cf430e030ddbb5b0abf93d22962f4752f3646cd9", "v7.0.2"),
-    "actions/setup-java": ("b843ebf9b913146b38da2eaa7aeddf76074ae1ad", "v6.1.0"),
-    "gradle/actions/setup-gradle": ("3f5f9adaf7d9fecd50b5935e54106014257a94e6", "v6.4.0"),
-    "sigstore/cosign-installer": ("6f9f17788090df1f26f669e9d70d6ae9567deba6", "v4.1.2"),
-    "actions/attest-build-provenance": ("4d101475d8b20a2381f78447822ac1eab6504dd8", "v4.2.2"),
-    "r0adkll/upload-google-play": ("e738b9dd8f2476ea806d921b64aacd24f34515a5", "v1.1.5"),
-}
+# The third-party actions the reusable workflows and job-setup may use. Their pins are not listed
+# here: Dependabot bumps them (one grouped PR moves every file), and test_pins keeps them consistent.
+RELEASE_ACTIONS = {"actions/checkout", "actions/setup-python", "actions/cache", "actions/upload-artifact",
+                   "actions/setup-java", "gradle/actions/setup-gradle", "sigstore/cosign-installer",
+                   "actions/attest-build-provenance", "r0adkll/upload-google-play"}
 SCALAR_OUTPUTS = {"mode", "create_version", "build", "upload_build", "listing", "whats_new", "screenshots", "creative",
                   "submit", "public_release", "asc", "poll_seconds", "wait_minutes", "marketing_version",
                   "build_number", "tool_sha", "upload_started_at", "build_id", "github_release", "production",
@@ -74,6 +68,31 @@ SETUP_JOBS = {"ios-prepare.yml": "ios-prepare", "ios-build.yml": "ios-build", "i
               "ios-store-plan.yml": "ios-store-plan", "android-gates.yml": "android-gates",
               "android-publish.yml": "android-publish", "android-store-plan.yml": "android-store-plan",
               "checks.yml": "checks"}
+
+
+PIN = re.compile(r"^\s*(?:-\s+)?uses:\s*(\S+)(.*)$")
+
+
+def collect_pins(files: list[tuple[str, str]]) -> tuple[dict[str, set[tuple[str, str]]], list[str]]:
+    """({action: {(sha, version)}}, malformed pins) over (file name, text) pairs; local and
+    store-release refs are skipped (the probe pins this repository's own commit)."""
+    pins: dict[str, set[tuple[str, str]]] = {}
+    malformed: list[str] = []
+    for name, text in files:
+        for number, line in enumerate(text.splitlines(), 1):
+            match = PIN.match(line)
+            if not match:
+                continue
+            target, rest = match.groups()
+            if target.startswith("./") or target.startswith("apoorvdarshan/store-release/"):
+                continue
+            action, _, ref = target.partition("@")
+            comment = rest.strip()
+            if not re.fullmatch(r"[0-9a-f]{40}", ref) or not re.fullmatch(r"# v\d+\.\d+\.\d+", comment):
+                malformed.append(f"{name} line {number}: {target}{rest}")
+                continue
+            pins.setdefault(action, set()).add((ref, comment[2:]))
+    return pins, malformed
 
 
 def load(name: str) -> dict:
@@ -143,20 +162,37 @@ class ReusableWorkflowTests(unittest.TestCase):
                 self.assertEqual(setup["with"], expected)
 
     def test_pins(self) -> None:
-        for path in sorted(WORKFLOWS.glob("*.yml")) + [TOOL_ROOT / ".github/actions/job-setup/action.yml"]:
-            for number, line in enumerate(path.read_text().splitlines(), 1):
-                match = re.match(r"^\s*(?:-\s+)?uses:\s*(\S+)(.*)$", line)
-                if not match:
-                    continue
-                target, rest = match.groups()
-                with self.subTest(file=path.name, line=number):
-                    if target.startswith("./") or target.startswith("apoorvdarshan/store-release/"):
-                        continue
-                    action, _, ref = target.partition("@")
-                    self.assertRegex(ref, r"^[0-9a-f]{40}$")
-                    self.assertRegex(rest.strip(), r"^# v\d+\.\d+\.\d+$")
-                    if path.name in INTERFACES or path.name == "action.yml":
-                        self.assertEqual((ref, rest.strip()[2:]), PINS[action])
+        """Every third-party action is pinned to a full commit SHA with a # vX.Y.Z comment, and each action
+        to the same SHA and version in every file, so a half-applied bump fails while a Dependabot bump
+        (which moves every file at once) passes."""
+        files = [(path.name, path.read_text()) for path in
+                 sorted(WORKFLOWS.glob("*.yml")) + [TOOL_ROOT / ".github/actions/job-setup/action.yml"]]
+        pins, malformed = collect_pins(files)
+        self.assertEqual(malformed, [])
+        for action, found in sorted(pins.items()):
+            with self.subTest(action=action):
+                self.assertEqual(len(found), 1, f"{action} is pinned to {sorted(found)}; use one pin everywhere")
+        release, _ = collect_pins([(name, text) for name, text in files if name in INTERFACES or name == "action.yml"])
+        self.assertEqual(set(release), RELEASE_ACTIONS, "a new action in the release path needs review here")
+
+    def test_the_pin_rule(self) -> None:
+        old, new = "3" * 40, "1" * 40
+        bumped = [("a.yml", f"      - uses: actions/checkout@{new} # v7.0.2\n"),
+                  ("b.yml", f"      - uses: actions/checkout@{new} # v7.0.2\n")]
+        self.assertEqual(collect_pins(bumped), ({"actions/checkout": {(new, "v7.0.2")}}, []))
+        half = [bumped[0], ("b.yml", f"      - uses: actions/checkout@{old} # v7.0.1\n")]
+        self.assertEqual(collect_pins(half)[0], {"actions/checkout": {(new, "v7.0.2"), (old, "v7.0.1")}})
+        loose = [("c.yml", "    uses: actions/checkout@v7\n    uses: actions/setup-python@" + new + "\n"
+                           "    uses: ./.github/actions/job-setup\n"
+                           "    uses: apoorvdarshan/store-release/.github/workflows/x.yml@" + old + " # probe\n")]
+        self.assertEqual(collect_pins(loose), ({}, ["c.yml line 1: actions/checkout@v7",
+                                                    f"c.yml line 2: actions/setup-python@{new}"]))
+
+    def test_every_job_declares_its_permissions(self) -> None:
+        for path in sorted(WORKFLOWS.glob("*.yml")):
+            for job_id, job in load(path.name)["jobs"].items():
+                with self.subTest(workflow=path.name, job=job_id):
+                    self.assertIn("permissions", job, "explicit permissions on every job")
 
     def run_scripts(self, name: str) -> list[tuple[str, str]]:
         return [(step.get("name", "?"), step["run"]) for step in only_job(load(name))[1]["steps"] if "run" in step]

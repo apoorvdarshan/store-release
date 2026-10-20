@@ -35,6 +35,8 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
     outputs:
       id: ${{ steps.context.outputs.id }}
     steps:

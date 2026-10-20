@@ -30,14 +30,19 @@ Impact: release-path (the first release)
   Fud AI's config pins them (export compliance `NO`; the two Asset Library images).
 - `revenuecat-gate --check-switch` in Android gates: an invalid
   `STORE_SYNC_REVENUECAT` fails a tag run before anything is built.
+- Store checks run each platform's steps only when the config has that platform
+  (`STORE_RELEASE_HAS_IOS`, `STORE_RELEASE_HAS_ANDROID`), so single-platform apps pass.
 - Pin checks against the release tag: `pins check` and `caller check --pr` (Store
   checks) fail unless store-release's `vX.Y.Z` tag points at the pinned commit,
   `caller check --runtime` (prepare, gates) warns, and `callers render` refuses an
   untagged commit unless `--allow-untagged` (store-release's own CI).
 - CI (`test (stdlib)`, `test (strict)`, `test (macos)`, `lint`, `workflows`, and the
   advisory `canary (fud-ai)` against fud-ai's real store files), CodeQL
-  (`Analyze (python)`, `Analyze (actions)`), dependency review, Dependabot, the
-  dispatch-only Release workflow (`scripts/release_check.py`) and the re-run probe.
+  (`Analyze (python)`, `Analyze (actions)`), dependency review, Dependabot (grouped,
+  with a seven-day cooldown), the dispatch-only Release workflow
+  (`scripts/release_check.py`: only GitHub Actions check runs from `ci.yml` and
+  `codeql.yml` count; one `gh release create` makes the tag and the release) and the
+  re-run probe. Every job, and every rendered caller job, declares its permissions.
 - Docs: config, switches, secrets, workflows, re-runs, store plan, verification,
   release process, yanked versions, provenance and roadmap.
 

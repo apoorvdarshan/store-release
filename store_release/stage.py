@@ -70,6 +70,7 @@ def tool_check(tool_root: Path, tool_sha: str, expected: str, *, job: str = "",
 SAFE_PATH = re.compile(r"[A-Za-z0-9._/+@ -]+")
 APP_NAME = re.compile(r"[^\n\r\x00]{1,64}")
 TASKS = re.compile(r":?[A-Za-z0-9_.:-]+( :?[A-Za-z0-9_.:-]+)*")
+BOOLEAN = re.compile(r"true|false")
 
 
 def export_values(config: Config, job: str, config_path: str = config_mod.DEFAULT_CONFIG
@@ -85,6 +86,12 @@ def export_values(config: Config, job: str, config_path: str = config_mod.DEFAUL
         raise StageError(f"{job} needs an [ios] table in store-release.toml")
     if job.startswith("android-") and config.android is None:
         raise StageError(f"{job} needs an [android] table in store-release.toml")
+    if job == "checks":
+        # The store checks skip the steps of a platform the app does not have.
+        values += [
+            ("STORE_RELEASE_HAS_IOS", "true" if config.ios is not None else "false", BOOLEAN),
+            ("STORE_RELEASE_HAS_ANDROID", "true" if config.android is not None else "false", BOOLEAN),
+        ]
     if want_ios and config.ios is not None:
         ios = config.ios
         values += [

@@ -13,8 +13,11 @@ Fails (exit 1, `error: ...` on stderr) unless every one of these holds:
    non-empty and has an "Impact: checks-only|validation|release-path|config-breaking"
    line. That body is written to --notes-out (the GitHub Release body).
 5. docs/yanked.md does not list VERSION.
-6. On --sha, the newest check run of each required check concluded success. A run
-   still queued or in progress counts as a failure: wait, then dispatch again.
+6. On --sha, the newest check run of each required check concluded success. Only
+   check runs that GitHub Actions created (app id 15368) in this commit's ci.yml or
+   codeql.yml workflow runs count, so a run of the same name from another app or
+   workflow cannot stand in. A run still queued or in progress counts as a failure:
+   wait, then dispatch again.
 
 Reads GitHub with the gh CLI (GH_TOKEN, GITHUB_REPOSITORY). Writes nothing but
 --notes-out; release.yml creates the tag only after this passes.
@@ -35,6 +38,9 @@ from typing import Callable, Mapping, Sequence
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_CHECKS = ("test (stdlib)", "test (strict)", "test (macos)", "lint", "workflows",
                    "Analyze (python)", "Analyze (actions)")
+# Only GitHub Actions check runs from these workflows count (the required checks are their jobs).
+GITHUB_ACTIONS_APP_ID = 15368
+REQUIRED_WORKFLOWS = (".github/workflows/ci.yml", ".github/workflows/codeql.yml")
 IMPACTS = ("checks-only", "validation", "release-path", "config-breaking")
 VERSION = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 SHA = re.compile(r"^[0-9a-f]{40}$")
@@ -126,18 +132,29 @@ def check_tags(gh: Gh, repository: str, version: str) -> None:
         raise ReleaseCheckError(f"v{version} is not greater than the existing tag v{highest}")
 
 
+def workflow_suites(gh: Gh, repository: str, sha: str) -> set[int]:
+    """The check suites of this commit's ci.yml and codeql.yml workflow runs."""
+    data = json.loads(gh(["api", f"repos/{repository}/actions/runs?head_sha={sha}&per_page=100"]))
+    return {run["check_suite_id"] for run in data.get("workflow_runs", [])
+            if run.get("path") in REQUIRED_WORKFLOWS and isinstance(run.get("check_suite_id"), int)}
+
+
 def check_runs(gh: Gh, repository: str, sha: str) -> None:
+    suites = workflow_suites(gh, repository, sha)
     data = json.loads(gh(["api", f"repos/{repository}/commits/{sha}/check-runs?per_page=100"]))
     newest: dict[str, dict] = {}
     for run in data.get("check_runs", []):
         name = run.get("name")
-        if name in REQUIRED_CHECKS and (name not in newest or run.get("id", 0) > newest[name].get("id", 0)):
+        if (name not in REQUIRED_CHECKS or (run.get("app") or {}).get("id") != GITHUB_ACTIONS_APP_ID
+                or (run.get("check_suite") or {}).get("id") not in suites):
+            continue
+        if name not in newest or run.get("id", 0) > newest[name].get("id", 0):
             newest[name] = run
     problems = []
     for name in REQUIRED_CHECKS:
         run = newest.get(name)
         if run is None:
-            problems.append(f"{name}: no check run on {sha[:12]}")
+            problems.append(f"{name}: no check run from {' or '.join(REQUIRED_WORKFLOWS)} on {sha[:12]}")
         elif run.get("status") != "completed":
             problems.append(f"{name}: still {run.get('status')}; wait for it, then dispatch again")
         elif run.get("conclusion") != "success":

@@ -84,24 +84,32 @@ jobs:
           python3 -I -u .store-release/run.py --app-root app listing prepare --platform all --out "$RUNNER_TEMP/store-meta"
           python3 -I -u .store-release/run.py --app-root app whats-new prepare --platform all --tag dry-run --out "$RUNNER_TEMP/store-meta"
           python3 -I -u .store-release/run.py --app-root app screenshots stage --dry-run --out "$RUNNER_TEMP/store-release/screenshots"
-      - name: Validate ASC / Play publisher steps (dry-run, no network)
+      # The platform steps run only for the platforms the config has (config export sets
+      # STORE_RELEASE_HAS_IOS and STORE_RELEASE_HAS_ANDROID for this job).
+      - name: Validate the ASC store steps (dry-run, no network)
+        if: env.STORE_RELEASE_HAS_IOS == 'true'
         run: |
           set -euo pipefail
           UPLOAD_LISTING=true UPLOAD_WHATS_NEW=true SUBMIT_IOS_REVIEW=true PUBLIC_RELEASE=false \
             python3 -I -u .store-release/run.py --app-root app ios store-step --dry-run --metadata-dir "$RUNNER_TEMP/store-meta" --build-id DRY-RUN --build-number 1
           UPLOAD_CREATIVE_ASSETS=true python3 -I -u .store-release/run.py --app-root app ios store-step --dry-run
-          UPLOAD_LISTING=true python3 -I -u .store-release/run.py --app-root app android play-listing --dry-run --metadata-dir "$RUNNER_TEMP/store-meta"
+      - name: Validate the Play publisher step (dry-run, no network)
+        if: env.STORE_RELEASE_HAS_ANDROID == 'true'
+        run: UPLOAD_LISTING=true python3 -I -u .store-release/run.py --app-root app android play-listing --dry-run --metadata-dir "$RUNNER_TEMP/store-meta"
       - name: RevenueCat catalog dry-run
         env:
           STORE_SYNC_REVENUECAT: "false"
         run: python3 -I -u .store-release/run.py --app-root app revenuecat-gate
-      - name: Check the project version, export compliance and gradle version
+      - name: Check the project version and export compliance
+        if: env.STORE_RELEASE_HAS_IOS == 'true'
         run: |
           set -euo pipefail
           python3 -I -u .store-release/run.py --app-root app ios project-version --setting MARKETING_VERSION
           python3 -I -u .store-release/run.py --app-root app ios project-version --setting CURRENT_PROJECT_VERSION
           python3 -I -u .store-release/run.py --app-root app ios export-compliance --project
-          python3 -I -u .store-release/run.py --app-root app android gradle-version
+      - name: Check the gradle version
+        if: env.STORE_RELEASE_HAS_ANDROID == 'true'
+        run: python3 -I -u .store-release/run.py --app-root app android gradle-version
       - name: Check release notes headings
         run: python3 -I -u .store-release/run.py --app-root app release-notes --check-headings
       # Release jobs install this hash-locked set before touching a store, so a broken

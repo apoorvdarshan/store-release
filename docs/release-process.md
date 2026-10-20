@@ -2,8 +2,8 @@
 
 ## Versions
 
-- SemVer tags `vX.Y.Z`, created only by the **Release** workflow and never moved.
-  Every fix is a new patch.
+- SemVer tags `vX.Y.Z`, created by the **Release** workflow (a convention: nothing
+  blocks creating a tag) and never moved. Every fix is a new patch.
 - While on 0.x: MINOR for a new app's features or config keys (with defaults that
   keep current behaviour) and for any `config-breaking` change; PATCH for fixes and
   pin bumps.
@@ -29,6 +29,11 @@ its entry under `[Unreleased]`. Each release section has:
 Dependabot bumps ship as patches: an action bump has Impact `release-path` or
 `validation` depending on which jobs use the action, a runtime lock bump
 (`requirements.txt`) `release-path`, a `requirements-checks.txt` bump `checks-only`.
+Dependabot waits seven days after a release before proposing it (security updates
+are not delayed), and its grouped PR moves every file that pins an action at once,
+which is what `test (strict)` requires: one pin per action everywhere. A new
+third-party action in the release path also needs adding to `RELEASE_ACTIONS` in
+`tests/workflows/test_workflows.py`.
 The locks are regenerated with `pip-compile --generate-hashes` (pip-tools 7.6.2) on
 Python 3.13. The Apple WWDR G3 and bundletool checksums are updated by hand, in a PR
 with Impact `validation`.
@@ -49,9 +54,26 @@ with Impact `validation`.
    6. the newest check run of `test (stdlib)`, `test (strict)`, `test (macos)`,
       `lint`, `workflows`, `Analyze (python)` and `Analyze (actions)` on the commit
       concluded `success` (still running counts as a failure: wait, then dispatch
-      again). The canary is advisory and not checked.
-3. Only then does the workflow create the tag on that commit and the GitHub Release,
-   marked Latest.
+      again). Only check runs that GitHub Actions created in the commit's `ci.yml`
+      and `codeql.yml` runs count. The canary is advisory and not checked.
+3. Only then does one call (`gh release create vX.Y.Z --target <commit>`) create the
+   tag on that commit and publish the GitHub Release, marked Latest. The step then
+   confirms the tag points at the commit.
+
+### When the Release run fails
+
+- Before the last step (a precondition failed): nothing was created. Fix the cause
+  (or wait for CI), then dispatch again.
+- In the last step: check what exists with
+  `gh release view vX.Y.Z --repo apoorvdarshan/store-release` and
+  `gh api repos/apoorvdarshan/store-release/git/ref/tags/vX.Y.Z`.
+  - Neither exists: dispatch again.
+  - Both exist and the tag points at the commit the run was for: the release went
+    through (the call failed after GitHub created it). Nothing to do.
+  - The tag points at another commit (a tag pushed between the check and the
+    release): yank that version ([yanked.md](yanked.md)) and release the next patch.
+  - A tag exists without a release: tags never move, so release the next patch, and
+    yank the version if anything pinned it.
 
 ## After the first tag
 

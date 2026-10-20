@@ -13,6 +13,10 @@ updates:
     groups:
       github-actions:
         patterns: ["*"]
+    # These pins run with every app's signing credentials: let a new release age a week
+    # first. Security updates are never delayed by a cooldown.
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: "CI"
   - package-ecosystem: pip
@@ -25,5 +29,7 @@ updates:
     groups:
       python:
         patterns: ["*"]
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: "Deps"

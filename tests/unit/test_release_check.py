@@ -43,14 +43,29 @@ YANKED = """# Yanked versions
 """
 
 
-def success(name: str, run_id: int = 1, status: str = "completed", conclusion: str | None = "success") -> dict:
-    return {"id": run_id, "name": name, "status": status, "conclusion": conclusion}
+# The check suites of this commit's workflow runs: ci.yml, codeql.yml and another workflow.
+CI_SUITE, CODEQL_SUITE, OTHER_SUITE = 101, 102, 103
+WORKFLOW_RUNS = [
+    {"id": 1, "path": ".github/workflows/ci.yml", "check_suite_id": CI_SUITE},
+    {"id": 2, "path": ".github/workflows/codeql.yml", "check_suite_id": CODEQL_SUITE},
+    {"id": 3, "path": ".github/workflows/other.yml", "check_suite_id": OTHER_SUITE},
+]
+
+
+def success(name: str, run_id: int = 1, status: str = "completed", conclusion: str | None = "success", *,
+            app: int = release_check.GITHUB_ACTIONS_APP_ID, suite: int | None = None) -> dict:
+    if suite is None:
+        suite = CODEQL_SUITE if name.startswith("Analyze (") else CI_SUITE
+    return {"id": run_id, "name": name, "status": status, "conclusion": conclusion, "app": {"id": app},
+            "check_suite": {"id": suite}}
 
 
 class FakeGh:
-    def __init__(self, tags: list[str] | None = None, runs: list[dict] | None = None) -> None:
+    def __init__(self, tags: list[str] | None = None, runs: list[dict] | None = None,
+                 workflow_runs: list[dict] | None = None) -> None:
         self.tags = tags or []
         self.runs = [success(name) for name in release_check.REQUIRED_CHECKS] if runs is None else runs
+        self.workflow_runs = WORKFLOW_RUNS if workflow_runs is None else workflow_runs
         self.calls: list[list[str]] = []
 
     def __call__(self, args):
@@ -58,6 +73,8 @@ class FakeGh:
         path = args[1]
         if "/git/matching-refs/tags/v" in path:
             return json.dumps([{"ref": f"refs/tags/{tag}"} for tag in self.tags])
+        if "/actions/runs?" in path:
+            return json.dumps({"total_count": len(self.workflow_runs), "workflow_runs": self.workflow_runs})
         if "/check-runs" in path:
             return json.dumps({"total_count": len(self.runs), "check_runs": self.runs})
         raise AssertionError(args)
@@ -93,6 +110,7 @@ class ReleaseCheckTests(unittest.TestCase):
         self.assertNotIn("0.1.0", notes)
         self.assertEqual([call[1] for call in gh.calls],
                          ["repos/owner/store-release/git/matching-refs/tags/v",
+                          f"repos/owner/store-release/actions/runs?head_sha={SHA}&per_page=100",
                           f"repos/owner/store-release/commits/{SHA}/check-runs?per_page=100"])
 
     def test_main_writes_the_notes(self) -> None:
@@ -180,6 +198,23 @@ class ReleaseCheckTests(unittest.TestCase):
         # Checks that are not required (the canary, the release job itself) are ignored.
         self.check(gh=FakeGh(runs=others + [success(names[0]), success("canary (fud-ai)", 3, conclusion="failure")]))
 
+    def test_only_github_actions_runs_of_ci_and_codeql_count(self) -> None:
+        names = release_check.REQUIRED_CHECKS
+        others = [success(name) for name in names[1:]]
+        # A same-named run from another GitHub App, or from another workflow of this repository, never counts.
+        impostors = {"another app": success(names[0], 9, app=12345),
+                     "another workflow": success(names[0], 9, suite=OTHER_SUITE),
+                     "no suite": {**success(names[0], 9), "check_suite": None}}
+        for case, run in impostors.items():
+            with self.subTest(case=case):
+                self.fails(r"test \(stdlib\): no check run from \.github/workflows/ci\.yml or "
+                           r"\.github/workflows/codeql\.yml", gh=FakeGh(runs=others + [run]))
+                # Nor can it outvote the real run: the newest run that counts decides.
+                self.fails(r"test \(stdlib\): failure",
+                           gh=FakeGh(runs=others + [success(names[0], 5, conclusion="failure"), run]))
+        # Without this commit's workflow runs, nothing counts.
+        self.fails("no check run from", gh=FakeGh(workflow_runs=[]))
+
     def test_the_required_checks_are_this_repositorys_jobs(self) -> None:
         ci = (TOOL_ROOT / ".github" / "workflows" / "ci.yml").read_text()
         codeql = (TOOL_ROOT / ".github" / "workflows" / "codeql.yml").read_text()
@@ -191,6 +226,9 @@ class ReleaseCheckTests(unittest.TestCase):
                 else:
                     self.assertRegex(ci, rf"(?m)^    name: {re.escape(name)}$")
         self.assertNotIn("canary (fud-ai)", release_check.REQUIRED_CHECKS)
+        self.assertEqual(release_check.REQUIRED_WORKFLOWS, (".github/workflows/ci.yml", ".github/workflows/codeql.yml"))
+        for path in release_check.REQUIRED_WORKFLOWS:
+            self.assertTrue((TOOL_ROOT / path).is_file(), path)
 
     def test_the_real_files_parse(self) -> None:
         version = release_check.package_version(TOOL_ROOT / "store_release" / "__init__.py")

@@ -52,10 +52,12 @@ Info.plist for its export compliance answer.
   or check the pin in the app's own CI, for example that
   `git ls-remote https://github.com/apoorvdarshan/store-release refs/tags/vX.Y.Z`
   prints the pinned SHA, or run zizmor's `impostor-commit` audit.
-- Release tags `vX.Y.Z` are created only by `release.yml`, after every required
-  check passed on that commit, and never move: releases are immutable, and the
-  "Release tags" ruleset (created right after the first tag,
-  [release-process.md](release-process.md)) blocks tag updates and deletion.
+- Release tags `vX.Y.Z` come from `release.yml`, after every required check passed on
+  that commit, and never move: releases are immutable (the tag is locked as the
+  release is published), and the "Release tags" ruleset (created right after the
+  first tag, [release-process.md](release-process.md)) blocks tag updates and
+  deletion. That only `release.yml` creates them is a convention: the ruleset does not
+  block creating a tag, so anyone with write access could push one.
 - Every job checks out store-release at `job.workflow_sha` and `tool check` confirms
   the checkout is that commit, so the workflow YAML and the Python it runs are the
   pinned commit's.
