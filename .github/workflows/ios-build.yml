@@ -276,5 +276,7 @@ jobs:
       - name: Remove signing material
         if: always()
         run: |
-          [ -n "${SIGNING_KEYCHAIN:-}" ] && security delete-keychain "$SIGNING_KEYCHAIN" 2>/dev/null || true
+          if [ -n "${SIGNING_KEYCHAIN:-}" ]; then
+            security delete-keychain "$SIGNING_KEYCHAIN" 2>/dev/null || true
+          fi
           rm -rf "${RUNNER_TEMP:?}/asc-keys" "${RUNNER_TEMP:?}/signing.p12" "${RUNNER_TEMP:?}/export" "${RUNNER_TEMP:?}/wwdr-g3.cer"
