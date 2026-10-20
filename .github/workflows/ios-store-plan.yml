@@ -1,0 +1,102 @@
+# iOS validation runs only (job "store-plan"): read-only and report-only. Prints every
+# App Store Connect write a tag run would make with the repository's current switches.
+# It never fails the validation build; it fails only when no plan can be computed.
+name: "store-release: iOS store plan"
+
+on:
+  workflow_call:
+    inputs:
+      config:
+        description: The app's store-release.toml, relative to its repository root.
+        type: string
+        default: store/store-release.toml
+      marketing_version:
+        type: string
+        required: true
+      tool_sha:
+        type: string
+        required: true
+    secrets:
+      APP_STORE_CONNECT_API_KEY_ID:
+        required: true
+      APP_STORE_CONNECT_ISSUER_ID:
+        required: true
+      APP_STORE_CONNECT_API_KEY_P8:
+        required: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  store-plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Check App Store Connect secrets are set
+        env:
+          HAS_APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID != '' }}
+          HAS_APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID != '' }}
+          HAS_APP_STORE_CONNECT_API_KEY_P8: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 != '' }}
+        run: |
+          set -euo pipefail
+          missing=()
+          for name in APP_STORE_CONNECT_API_KEY_ID APP_STORE_CONNECT_ISSUER_ID APP_STORE_CONNECT_API_KEY_P8; do
+            has="HAS_$name"; [ "${!has}" = true ] || missing+=("$name")
+          done
+          [ "${#missing[@]}" -eq 0 ] || { echo "error: missing secret(s): ${missing[*]}" >&2; exit 1; }
+      - name: Check out the app's store-release config
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: app
+          persist-credentials: false
+          filter: blob:none
+          sparse-checkout-cone-mode: false
+          sparse-checkout: /${{ inputs.config }}
+      - name: Check out store-release at this workflow's commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .store-release
+          persist-credentials: false
+      - name: Set up this job
+        uses: ./.store-release/.github/actions/job-setup
+        with:
+          job: ios-store-plan
+          config: ${{ inputs.config }}
+          tool-sha: ${{ job.workflow_sha }}
+          expected-tool-sha: ${{ inputs.tool_sha }}
+      - name: Check this stage's inputs
+        env:
+          INPUT_VERSION: ${{ inputs.marketing_version }}
+          DISPATCH_MARKETING_VERSION: ${{ github.event.inputs.marketing_version }}
+        run: >-
+          python3 -I -u .store-release/run.py --app-root app stage check --stage ios-store-plan --marketing-version "$INPUT_VERSION"
+          --dispatch-version "$DISPATCH_MARKETING_VERSION"
+      - name: Install store tooling
+        run: python3 -m pip install --disable-pip-version-check --require-hashes -r .store-release/requirements.txt
+      - name: Plan what a tag run would change in App Store Connect (read-only)
+        env:
+          IOS_RELEASE_AUTOMATION: ${{ vars.IOS_RELEASE_AUTOMATION }}
+          IOS_CREATE_VERSION: ${{ vars.IOS_CREATE_VERSION }}
+          IOS_UPLOAD_BUILD: ${{ vars.IOS_UPLOAD_BUILD }}
+          IOS_UPLOAD_LISTING: ${{ vars.IOS_UPLOAD_LISTING }}
+          IOS_UPLOAD_WHATS_NEW: ${{ vars.IOS_UPLOAD_WHATS_NEW }}
+          IOS_UPLOAD_SCREENSHOTS: ${{ vars.IOS_UPLOAD_SCREENSHOTS }}
+          IOS_UPLOAD_CREATIVE_ASSETS: ${{ vars.IOS_UPLOAD_CREATIVE_ASSETS }}
+          IOS_SUBMIT_REVIEW: ${{ vars.IOS_SUBMIT_REVIEW }}
+          IOS_PUBLIC_RELEASE: ${{ vars.IOS_PUBLIC_RELEASE }}
+          IOS_BUILD_POLL_SECONDS: ${{ vars.IOS_BUILD_POLL_SECONDS }}
+          IOS_BUILD_WAIT_MINUTES: ${{ vars.IOS_BUILD_WAIT_MINUTES }}
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_API_KEY_P8: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}
+          INPUT_VERSION: ${{ inputs.marketing_version }}
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -I -u .store-release/run.py --app-root app ios plan --version "$INPUT_VERSION" --work-dir "$RUNNER_TEMP/store-plan"

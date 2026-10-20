@@ -1,0 +1,607 @@
+"""An app's caller workflows: rendered from its config, checked at run time and in pull requests.
+
+  callers render     the exact text of ios-release.yml, android-release.yml and store-checks.yml
+                     for this config, store-release commit and version. It is the only source
+                     of caller text: examples/ and every app's callers come from it.
+  caller check --pr  (PyYAML) the app's callers parse to exactly the rendered ones (comments
+                     aside), and every store-release ref is this commit with its version comment.
+  caller check --runtime
+                     (stdlib, in prepare/gates) every store-release ref in the running caller is
+                     this job's commit, and its concurrency is exactly the release queue.
+  pins check         every store-release ref in any app workflow is this commit and version.
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import re
+import sys
+from pathlib import Path
+from typing import Any
+
+from store_release import __version__
+from store_release.config import DEFAULT_CONFIG, Config, ConfigError, render_template
+
+DEFAULT_REPOSITORY = "apoorvdarshan/store-release"
+SHA40 = re.compile(r"[0-9a-f]{40}")
+VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
+REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
+CALLER_FILES = {"ios": "ios-release.yml", "android": "android-release.yml", "checks": "store-checks.yml"}
+# A plain job with either name would satisfy an app's required status check by accident.
+FORBIDDEN_JOB_NAMES = ("web", "android")
+ASC_SECRETS = ("APP_STORE_CONNECT_API_KEY_ID", "APP_STORE_CONNECT_ISSUER_ID", "APP_STORE_CONNECT_API_KEY_P8")
+SIGNING_SECRETS = ("IOS_DEV_SIGNING_P12_BASE64", "IOS_DEV_SIGNING_P12_PASSWORD")
+KEYSTORE_SECRETS = ("ANDROID_KEYSTORE_BASE64", "ANDROID_KEYSTORE_PASSWORD", "ANDROID_KEY_ALIAS", "ANDROID_KEY_PASSWORD")
+PLAY_SECRET = "PLAY_SERVICE_ACCOUNT_JSON"
+GATE_LABELS = {"ios-tests": "the iOS tests", "quality": "quality checks"}
+
+
+class CallerError(ConfigError):
+    """A caller workflow differs from what this store-release version renders, or is pinned wrongly."""
+
+
+def _uses(repository: str, workflow: str, sha: str, version: str) -> str:
+    return f"uses: {repository}/.github/workflows/{workflow}@{sha} # v{version}"
+
+
+def _secrets(names: tuple[str, ...]) -> list[str]:
+    return ["    secrets:"] + [f"      {name}: ${{{{ secrets.{name} }}}}" for name in names]
+
+
+def _with(values: list[tuple[str, str]], config_path: str) -> list[str]:
+    if config_path != DEFAULT_CONFIG:
+        values = [("config", f'"{config_path}"'), *values]
+    if not values:
+        return []
+    return ["    with:"] + [f"      {key}: {value}" for key, value in values]
+
+
+def _human(items: list[str]) -> str:
+    if len(items) == 1:
+        return items[0]
+    return ", ".join(items[:-1]) + " and " + items[-1]
+
+
+def _gate_labels(ids: list[str]) -> str:
+    return _human([GATE_LABELS.get(job_id, f"the {job_id} job") for job_id in ids])
+
+
+def _pronoun(ids: list[str]) -> str:
+    return {1: "it", 2: "both"}.get(len(ids), "them")
+
+
+def _header_rows(rows: list[tuple[str, list[str]]]) -> list[str]:
+    width = max(20, max(len(left) for left, _ in rows) + 3)
+    lines = []
+    for left, right in rows:
+        lines.append(f"#   {left:<{width}}{right[0]}".rstrip())
+        lines.extend(f"#   {'':<{width}}{line}" for line in right[1:])
+    return lines
+
+
+def _regex_repository(repository: str) -> str:
+    return repository.replace(".", r"\.")
+
+
+def render_ios(config: Config, *, sha: str, version: str, repository: str = DEFAULT_REPOSITORY,
+               config_path: str = DEFAULT_CONFIG) -> str:
+    ios = config.ios
+    if ios is None:
+        raise CallerError("no [ios] in store-release.toml; there is no iOS caller to render")
+    gates = [job.id for job in ios.gate_jobs]
+    prefix = ios.tag_prefix
+    gate_results = " ".join(f"{gate}=${{{{ needs.{gate}.result }}}}" for gate in gates)
+    all_success = " && ".join(f"needs.{gate}.result == 'success'" for gate in gates)
+    all_skipped = " && ".join(f"needs.{gate}.result == 'skipped'" for gate in gates)
+    needs = lambda *extra: "[" + ", ".join([*gates, *extra]) + "]"  # noqa: E731
+    lines = [
+        f"# iOS Release: a thin caller of {repository}, pinned by commit SHA.",
+        "# Rendered by `run.py callers render --platform ios`; Store checks fails when it drifts.",
+        "#",
+        *_header_rows([
+            (f"push tag {prefix}X.Y", ["release run (the tag must equal MARKETING_VERSION)"]),
+            ("Run workflow", ["validation run: archive, sign, export and validate the IPA with",
+                              "App Store Connect; never uploads. store-plan prints, read-only,",
+                              "what a tag run would change in App Store Connect."]),
+        ]),
+        "#",
+        "# Switches (repository variables), secrets, re-runs and verification:",
+        f"# https://github.com/{repository}/tree/v{version}/docs",
+        "name: iOS Release",
+        "",
+        "on:",
+        "  push:",
+        "    tags:",
+        f'      - "{prefix}*"',
+        "  workflow_dispatch:",
+        "    inputs:",
+        "      marketing_version:",
+        "        description: >-",
+        "          Validation only: version to validate as (e.g. 7.2). Empty = the project",
+        "          version. Apple rejects versions already approved, so use the next one.",
+        "        required: false",
+        '        default: ""',
+        "",
+        "permissions:",
+        "  contents: read",
+        "",
+        "# Build numbers come from App Store Connect, so tag release runs never overlap.",
+        "# Manual validation runs get their own group and can never cancel a release run.",
+        "concurrency:",
+        "  group: ios-release-${{ github.event_name == 'push' && 'release' || github.run_id }}",
+        "  cancel-in-progress: false",
+        "  # Keep every waiting tag run queued; the default (single) would cancel an older pending run.",
+        "  queue: max",
+        "",
+        "jobs:",
+    ]
+    for job in ios.gate_jobs:
+        lines += [f"  {job.id}:", "    if: github.event_name == 'push'", f"    uses: {job.uses}", "    permissions:",
+                  "      contents: read", ""]
+    lines += [
+        "  prepare:",
+        f"    {_uses(repository, 'ios-prepare.yml', sha, version)}",
+        "    permissions:",
+        "      contents: read",
+        *_with([("marketing_version", "${{ inputs.marketing_version }}")], config_path),
+        *_secrets(ASC_SECRETS),
+        "",
+        "  build:",
+        f"    needs: {needs('prepare')}",
+        f"    # Tag runs need {_gate_labels(gates)} to pass; validation runs skip {_pronoun(gates)}.",
+        "    if: >-",
+        "      !cancelled() && needs.prepare.result == 'success' &&",
+        "      needs.prepare.outputs.build == 'true' &&",
+        f"      (({all_success}) ||",
+        "       (github.event_name == 'workflow_dispatch' &&",
+        f"        {all_skipped}))",
+        f"    {_uses(repository, 'ios-build.yml', sha, version)}",
+        "    permissions:",
+        "      contents: read",
+        *_with([("gates", f'"{gate_results}"'),
+                ("mode", "${{ needs.prepare.outputs.mode }}"),
+                ("marketing_version", "${{ needs.prepare.outputs.marketing_version }}"),
+                ("build_number", "${{ needs.prepare.outputs.build_number }}"),
+                ("tool_sha", "${{ needs.prepare.outputs.tool_sha }}")], config_path),
+        *_secrets(ASC_SECRETS + SIGNING_SECRETS),
+        "",
+        "  # Its own job, so \"Re-run failed jobs\" after a later store-step failure keeps this",
+        "  # result (and build_id) instead of waiting again against the original upload deadline.",
+        "  wait-for-build:",
+        f"    needs: {needs('prepare', 'build')}",
+        "    if: >-",
+        "      !cancelled() && needs.prepare.result == 'success' &&",
+        "      needs.prepare.outputs.mode == 'release' &&",
+        "      needs.prepare.outputs.upload_build == 'true' &&",
+        f"      {all_success} &&",
+        "      needs.build.result == 'success'",
+        f"    {_uses(repository, 'ios-wait-for-build.yml', sha, version)}",
+        "    permissions:",
+        "      contents: read",
+        *_with([("marketing_version", "${{ needs.prepare.outputs.marketing_version }}"),
+                ("build_number", "${{ needs.prepare.outputs.build_number }}"),
+                ("upload_started_at", "${{ needs.build.outputs.upload_started_at }}"),
+                ("wait_minutes", "${{ needs.prepare.outputs.wait_minutes }}"),
+                ("poll_seconds", "${{ needs.prepare.outputs.poll_seconds }}"),
+                ("tool_sha", "${{ needs.prepare.outputs.tool_sha }}")], config_path),
+        *_secrets(ASC_SECRETS),
+        "",
+        "  app-store-connect:",
+        f"    needs: {needs('prepare', 'build', 'wait-for-build')}",
+        "    # With IOS_UPLOAD_BUILD on, only after this run's build is processed; with it off,",
+        "    # listing/What's New/screenshots/creative assets run without a build.",
+        "    if: >-",
+        "      !cancelled() && needs.prepare.result == 'success' &&",
+        "      needs.prepare.outputs.mode == 'release' &&",
+        "      needs.prepare.outputs.asc == 'true' &&",
+        f"      {all_success} &&",
+        "      ((needs.build.result == 'success' && needs.wait-for-build.result == 'success') ||",
+        "       (needs.prepare.outputs.upload_build != 'true' &&",
+        "        needs.build.result == 'skipped' && needs.wait-for-build.result == 'skipped'))",
+        f"    {_uses(repository, 'ios-app-store-connect.yml', sha, version)}",
+        "    permissions:",
+        "      contents: read",
+        *_with([("gates", f'"{gate_results}"'),
+                ("marketing_version", "${{ needs.prepare.outputs.marketing_version }}"),
+                ("build_number", "${{ needs.prepare.outputs.build_number }}"),
+                ("build_id", "${{ needs.wait-for-build.outputs.build_id }}"),
+                ("upload_build", "${{ needs.prepare.outputs.upload_build }}"),
+                ("listing", "${{ needs.prepare.outputs.listing }}"),
+                ("whats_new", "${{ needs.prepare.outputs.whats_new }}"),
+                ("screenshots", "${{ needs.prepare.outputs.screenshots }}"),
+                ("creative", "${{ needs.prepare.outputs.creative }}"),
+                ("submit", "${{ needs.prepare.outputs.submit }}"),
+                ("public_release", "${{ needs.prepare.outputs.public_release }}"),
+                ("tool_sha", "${{ needs.prepare.outputs.tool_sha }}")], config_path),
+        *_secrets(ASC_SECRETS),
+        "",
+        "  github-release:",
+        f"    needs: {needs('prepare', 'build', 'wait-for-build', 'app-store-connect')}",
+        "    if: >-",
+        "      !cancelled() && github.event_name == 'push' &&",
+        *[f"      needs.{gate}.result == 'success' &&" for gate in gates[:-1]],
+        f"      needs.{gates[-1]}.result == 'success' && needs.prepare.result == 'success' &&",
+        "      (needs.build.result == 'success' || needs.build.result == 'skipped') &&",
+        "      (needs.wait-for-build.result == 'success' || needs.wait-for-build.result == 'skipped') &&",
+        "      (needs.app-store-connect.result == 'success' || needs.app-store-connect.result == 'skipped')",
+        f"    {_uses(repository, 'ios-github-release.yml', sha, version)}",
+        "    permissions:",
+        "      contents: write",
+        *_with([("gates", f'"{gate_results}"'),
+                ("marketing_version", "${{ needs.prepare.outputs.marketing_version }}"),
+                ("uploaded_build", "${{ needs.build.result == 'success' && needs.prepare.outputs.build_number || '' }}"),
+                ("tool_sha", "${{ needs.prepare.outputs.tool_sha }}")], config_path),
+        "",
+        "  # Validation runs only: a read-only, report-only plan of what a tag run would change.",
+        "  store-plan:",
+        "    needs: prepare",
+        "    if: github.event_name == 'workflow_dispatch' && needs.prepare.result == 'success'",
+        f"    {_uses(repository, 'ios-store-plan.yml', sha, version)}",
+        "    permissions:",
+        "      contents: read",
+        *_with([("marketing_version", "${{ needs.prepare.outputs.marketing_version }}"),
+                ("tool_sha", "${{ needs.prepare.outputs.tool_sha }}")], config_path),
+        *_secrets(ASC_SECRETS),
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def render_android(config: Config, *, sha: str, version: str, app_repository: str,
+                   repository: str = DEFAULT_REPOSITORY, config_path: str = DEFAULT_CONFIG) -> str:
+    android = config.android
+    if android is None:
+        raise CallerError("no [android] in store-release.toml; there is no Android caller to render")
+    if not REPOSITORY.fullmatch(app_repository or ""):
+        raise CallerError(f"the app repository {app_repository!r} is not owner/name (--app-repository)")
+    gates = [job.id for job in android.gate_jobs]
+    prefix = android.tag_prefix
+    asset = render_template(android.asset_name, slug=config.app.slug, version="X.Y", version_code="N")
+    gate_results = " ".join(f"{gate}=${{{{ needs.{gate}.result }}}}" for gate in gates)
+    all_success = " && ".join(f"needs.{gate}.result == 'success'" for gate in gates)
+    all_skipped = " && ".join(f"needs.{gate}.result == 'skipped'" for gate in gates)
+    success = f"({all_success} ||" if len(gates) == 1 else f"(({all_success}) ||"
+    lines = [
+        f"# Android Release: a thin caller of {repository}, pinned by commit SHA.",
+        "# Rendered by `run.py callers render --platform android`; Store checks fails when it drifts.",
+        "#",
+        *_header_rows([
+            (f"push tag {prefix}X.Y", ["release run (the tag must equal versionName)"]),
+            ("Run workflow", ["validation run: build the signed AAB and APK and verify them;",
+                              "never uploads, signs with Sigstore or releases. store-plan",
+                              "prints, read-only, what a tag run would change."]),
+        ]),
+        "#",
+        "# Verifying a GitHub Release download built by store-release (earlier releases:",
+        "# store/README.md):",
+        f"#   cosign verify-blob {asset}.apk --bundle {asset}.apk.sigstore.json \\",
+        f"#     --certificate-identity-regexp '^https://github\\.com/{_regex_repository(repository)}"
+        "/\\.github/workflows/android-publish\\.yml@[0-9a-f]{40}$' \\",
+        "#     --certificate-oidc-issuer https://token.actions.githubusercontent.com \\",
+        f"#     --certificate-github-workflow-repository {app_repository}",
+        f"#   gh attestation verify {asset}.apk --repo {app_repository} \\",
+        f"#     --signer-workflow {repository}/.github/workflows/android-publish.yml",
+        "name: Android Release",
+        "",
+        "on:",
+        "  push:",
+        "    tags:",
+        f'      - "{prefix}*"',
+        "  workflow_dispatch:",
+        "",
+        "permissions:",
+        "  contents: read",
+        "",
+        "# Tag release runs never overlap. Manual validation runs get their own group and",
+        "# can never cancel a release run.",
+        "concurrency:",
+        "  group: android-release-${{ github.event_name == 'push' && 'release' || github.run_id }}",
+        "  cancel-in-progress: false",
+        "  # Keep every waiting tag run queued; the default (single) would cancel an older pending run.",
+        "  queue: max",
+        "",
+        "jobs:",
+        "  gates:",
+        f"    {_uses(repository, 'android-gates.yml', sha, version)}",
+        "    permissions:",
+        "      contents: read",
+        "      actions: read",
+        *_with([], config_path),
+        "    secrets:",
+        f"      {PLAY_SECRET}: ${{{{ secrets.{PLAY_SECRET} }}}}",
+        "",
+    ]
+    for job in android.gate_jobs:
+        lines += [f"  {job.id}:", "    needs: gates",
+                  "    if: needs.gates.outputs.mode == 'release' && needs.gates.outputs.build == 'true'",
+                  f"    uses: {job.uses}", "    permissions:", "      contents: read", ""]
+    lines += [
+        "  release:",
+        "    needs: [" + ", ".join(["gates", *gates]) + "]",
+        f"    # Validation runs skip {_human(gates)}; release runs need {'it' if len(gates) == 1 else 'them'} to pass. A tag with",
+        "    # ANDROID_RELEASE_AUTOMATION off resolves build=false, so this is skipped: a green no-op.",
+        "    if: >-",
+        "      !cancelled() && needs.gates.result == 'success' && needs.gates.outputs.build == 'true' &&",
+        f"      {success}",
+        f"       (needs.gates.outputs.mode == 'validate' && {all_skipped}))",
+        f"    {_uses(repository, 'android-publish.yml', sha, version)}",
+        "    permissions:",
+        "      contents: write",
+        "      id-token: write",
+        "      attestations: write",
+        "      actions: read",
+        *_with([("gates", f'"{gate_results}"'),
+                ("mode", "${{ needs.gates.outputs.mode }}"),
+                ("build", "${{ needs.gates.outputs.build }}"),
+                ("github_release", "${{ needs.gates.outputs.github_release }}"),
+                ("listing", "${{ needs.gates.outputs.listing }}"),
+                ("whats_new", "${{ needs.gates.outputs.whats_new }}"),
+                ("screenshots", "${{ needs.gates.outputs.screenshots }}"),
+                ("production", "${{ needs.gates.outputs.production }}"),
+                ("play_upload", "${{ needs.gates.outputs.play_upload }}"),
+                ("play_tracks", "${{ needs.gates.outputs.play_tracks }}"),
+                ("tool_sha", "${{ needs.gates.outputs.tool_sha }}")], config_path),
+        *_secrets(KEYSTORE_SECRETS + (PLAY_SECRET,)),
+        "",
+        "  # Validation runs only: a read-only, report-only plan of what a tag run would change.",
+        "  store-plan:",
+        "    needs: gates",
+        "    if: github.event_name == 'workflow_dispatch' && needs.gates.result == 'success'",
+        f"    {_uses(repository, 'android-store-plan.yml', sha, version)}",
+        "    permissions:",
+        "      contents: read",
+        *_with([("tool_sha", "${{ needs.gates.outputs.tool_sha }}")], config_path),
+        "    secrets:",
+        f"      {PLAY_SECRET}: ${{{{ secrets.{PLAY_SECRET} }}}}",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def render_checks(config: Config, *, sha: str, version: str, repository: str = DEFAULT_REPOSITORY,
+                  config_path: str = DEFAULT_CONFIG) -> str:
+    def paths_block() -> list[str]:
+        if not config.checks_paths:
+            return []
+        return ["    paths:"] + [f'      - "{path}"' for path in config.checks_paths]
+
+    lines = [
+        "# Store checks: validates the store data, the store-release config and these callers",
+        "# against the pinned store-release version. Never uploads anything. Safe to run anytime.",
+        "# Rendered by `run.py callers render --platform checks`.",
+        "name: Store checks",
+        "",
+        "on:",
+        "  push:",
+        "    branches: [main]",
+        *paths_block(),
+        "  pull_request:",
+        *paths_block(),
+        "  workflow_dispatch:",
+        "",
+        "permissions:",
+        "  contents: read",
+        "",
+        "# A newer push to a pull request cancels its older run; main and manual runs are never cancelled.",
+        "concurrency:",
+        "  group: store-checks-${{ github.event_name == 'pull_request' && "
+        "format('pr-{0}', github.event.pull_request.number) || github.run_id }}",
+        "  cancel-in-progress: ${{ github.event_name == 'pull_request' }}",
+        "",
+        "jobs:",
+        "  checks:",
+        f"    {_uses(repository, 'checks.yml', sha, version)}",
+        "    permissions:",
+        "      contents: read",
+        *_with([], config_path),
+        "",
+        f"  # One stable check name across store-release versions (not a required check in v{version}).",
+        "  store-release:",
+        "    needs: checks",
+        "    if: ${{ always() }}",
+        "    runs-on: ubuntu-latest",
+        "    timeout-minutes: 5",
+        "    steps:",
+        "      - name: Require the store checks to pass",
+        "        env:",
+        "          RESULT: ${{ needs.checks.result }}",
+        '        run: test "$RESULT" = success',
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def render(config: Config, platform: str, *, sha: str, version: str, repository: str = DEFAULT_REPOSITORY,
+           app_repository: str = "", config_path: str = DEFAULT_CONFIG) -> str:
+    if not SHA40.fullmatch(sha or ""):
+        raise CallerError(f"--sha {sha!r} is not a 40-hex commit SHA")
+    if not VERSION.fullmatch(version or ""):
+        raise CallerError(f"--version {version!r} must look like 0.1.0")
+    if not REPOSITORY.fullmatch(repository or ""):
+        raise CallerError(f"--repository {repository!r} is not owner/name")
+    if platform == "ios":
+        return render_ios(config, sha=sha, version=version, repository=repository, config_path=config_path)
+    if platform == "android":
+        return render_android(config, sha=sha, version=version, repository=repository, app_repository=app_repository,
+                              config_path=config_path)
+    if platform == "checks":
+        return render_checks(config, sha=sha, version=version, repository=repository, config_path=config_path)
+    raise CallerError(f"unknown caller {platform!r}")
+
+
+def render_main(config: Config, argv: list[str], *, config_path: str = DEFAULT_CONFIG) -> int:
+    parser = argparse.ArgumentParser(prog="callers render")
+    parser.add_argument("--platform", required=True, choices=sorted(CALLER_FILES))
+    parser.add_argument("--sha", required=True)
+    parser.add_argument("--version", required=True)
+    parser.add_argument("--repository", default=DEFAULT_REPOSITORY)
+    parser.add_argument("--app-repository", default=os.environ.get("GITHUB_REPOSITORY", ""))
+    parser.add_argument("--config-in-app", default=config_path,
+                        help="the config path the app's callers name (default: --config)")
+    parser.add_argument("--out", type=Path)
+    args = parser.parse_args(argv)
+    text = render(config, args.platform, sha=args.sha, version=args.version, repository=args.repository,
+                  app_repository=args.app_repository, config_path=args.config_in_app)
+    if args.out:
+        args.out.write_text(text, encoding="utf-8")
+        print(f"rendered {args.out}")
+    else:
+        sys.stdout.write(text)
+    return 0
+
+
+# --- checks ----------------------------------------------------------------------
+
+
+def _tool_identity(environ: dict[str, str]) -> tuple[str, str]:
+    sha = environ.get("TOOL_SHA", "")
+    repository = environ.get("TOOL_REPOSITORY", "")
+    if not SHA40.fullmatch(sha):
+        raise CallerError(f"TOOL_SHA {sha!r} is not this job's 40-hex job.workflow_sha")
+    if not REPOSITORY.fullmatch(repository):
+        raise CallerError(f"TOOL_REPOSITORY {repository!r} is not owner/name (job.workflow_repository)")
+    return sha, repository
+
+
+def store_release_refs(text: str, repository: str) -> list[tuple[int, str, str, str]]:
+    """(line number, workflow file, ref, rest of the line) for every uses: of a store-release workflow."""
+    pattern = re.compile(rf"^\s*(?:-\s+)?uses:\s*{re.escape(repository)}/\.github/workflows/([A-Za-z0-9._-]+)"
+                         r"@([^\s#]*)(.*)$")
+    found = []
+    for number, line in enumerate(text.splitlines(), 1):
+        match = pattern.match(line)
+        if match:
+            found.append((number, match.group(1), match.group(2), match.group(3)))
+        elif f"{repository}/.github/workflows/" in line and not line.lstrip().startswith("#"):
+            found.append((number, "?", "", line))
+    return found
+
+
+def concurrency_lines(text: str) -> list[str]:
+    """The top-level concurrency block's non-comment lines, whitespace-normalized."""
+    lines = text.splitlines()
+    found: list[str] = []
+    inside = False
+    for line in lines:
+        if not inside:
+            if line.rstrip() == "concurrency:":
+                inside = True
+            continue
+        if line and not line[0].isspace() and not line.startswith("#"):
+            break
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#"):
+            found.append(" ".join(stripped.split()))
+    return found
+
+
+def runtime_check(app_root: Path, platform: str, *, environ: dict[str, str] | None = None) -> None:
+    from store_release import paths  # noqa: PLC0415
+
+    env = dict(os.environ if environ is None else environ)
+    sha, repository = _tool_identity(env)
+    relative = paths.caller_path(env.get("GITHUB_WORKFLOW_REF", ""), env.get("GITHUB_REPOSITORY", ""))
+    path = app_root / relative
+    if not path.is_file():
+        raise CallerError(f"the caller workflow {relative} is not in the checkout")
+    text = path.read_text(encoding="utf-8")
+    refs = store_release_refs(text, repository)
+    if not refs:
+        raise CallerError(f"{relative} calls no {repository} workflow")
+    wrong = [f"line {number}: {workflow}@{ref or '?'}" for number, workflow, ref, _ in refs if ref != sha]
+    if wrong:
+        raise CallerError(f"every {repository} ref in {relative} must be pinned to {sha} (this job's commit); "
+                          f"found {'; '.join(wrong)}")
+    expected = [f"group: {platform}-release-${{{{ github.event_name == 'push' && 'release' || github.run_id }}}}",
+                "cancel-in-progress: false", "queue: max"]
+    found = concurrency_lines(text)
+    if found != expected:
+        raise CallerError(f"{relative} must keep exactly this concurrency (release runs queue, never cancel): "
+                          f"{expected}; found {found}")
+    print(f"{relative}: {len(refs)} store-release ref(s) pinned to {sha}; release concurrency queues")
+
+
+def _normalize(value: Any) -> Any:
+    """PyYAML reads the key `on` as the boolean True; put it back."""
+    if isinstance(value, dict):
+        return {("on" if key is True else key): _normalize(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_normalize(item) for item in value]
+    return value
+
+
+def differences(found: Any, expected: Any, path: str = "") -> list[str]:
+    if isinstance(found, dict) and isinstance(expected, dict):
+        result = []
+        for key in sorted(set(found) | set(expected), key=str):
+            here = f"{path}.{key}" if path else str(key)
+            if key not in found:
+                result.append(f"{here}: missing")
+            elif key not in expected:
+                result.append(f"{here}: not expected")
+            else:
+                result += differences(found[key], expected[key], here)
+        return result
+    if isinstance(found, list) and isinstance(expected, list):
+        if len(found) != len(expected):
+            return [f"{path}: {len(found)} items, expected {len(expected)}"]
+        result = []
+        for index, (a, b) in enumerate(zip(found, expected)):
+            result += differences(a, b, f"{path}[{index}]")
+        return result
+    return [] if found == expected else [f"{path}: {found!r}, expected {expected!r}"]
+
+
+def _job_names(document: Any) -> list[str]:
+    jobs = document.get("jobs") if isinstance(document, dict) else None
+    return list(jobs) if isinstance(jobs, dict) else []
+
+
+def pr_check(config: Config, app_root: Path, *, environ: dict[str, str] | None = None,
+             config_path: str = DEFAULT_CONFIG) -> None:
+    import yaml  # noqa: PLC0415 - pull request checks only (requirements-checks.txt)
+
+    env = dict(os.environ if environ is None else environ)
+    sha, repository = _tool_identity(env)
+    platforms = [name for name, table in (("ios", config.ios), ("android", config.android)) if table is not None]
+    problems: list[str] = []
+    for platform in [*platforms, "checks"]:
+        name = CALLER_FILES[platform]
+        path = app_root / ".github" / "workflows" / name
+        if not path.is_file():
+            problems.append(f"{name}: missing (render it with `run.py callers render --platform {platform}`)")
+            continue
+        text = path.read_text(encoding="utf-8")
+        expected_text = render(config, platform, sha=sha, version=__version__, repository=repository,
+                               app_repository=env.get("GITHUB_REPOSITORY", ""), config_path=config_path)
+        try:
+            found = _normalize(yaml.safe_load(text))
+        except yaml.YAMLError as exc:
+            problems.append(f"{name}: not valid YAML ({exc})")
+            continue
+        expected = _normalize(yaml.safe_load(expected_text))
+        for job in _job_names(found):
+            if job in FORBIDDEN_JOB_NAMES:
+                problems.append(f"{name}: a job named {job!r} would satisfy the required '{job}' check by accident")
+        problems += [f"{name}: {line}" for line in differences(found, expected)]
+        for number, workflow, ref, rest in store_release_refs(text, repository):
+            if ref != sha or rest.strip() != f"# v{__version__}":
+                problems.append(f"{name} line {number}: {workflow}@{ref or '?'}{rest} must be @{sha} # v{__version__}")
+    if problems:
+        raise CallerError("the caller workflows differ from what store-release v"
+                          f"{__version__} renders:\n  " + "\n  ".join(problems))
+    print(f"callers match store-release v{__version__} ({', '.join(CALLER_FILES[p] for p in [*platforms, 'checks'])})")
+
+
+def pins_check(app_root: Path, *, environ: dict[str, str] | None = None) -> None:
+    env = dict(os.environ if environ is None else environ)
+    sha, repository = _tool_identity(env)
+    workflows = app_root / ".github" / "workflows"
+    problems: list[str] = []
+    count = 0
+    for path in sorted(list(workflows.glob("*.yml")) + list(workflows.glob("*.yaml"))):
+        for number, workflow, ref, rest in store_release_refs(path.read_text(encoding="utf-8"), repository):
+            count += 1
+            if ref != sha or rest.strip() != f"# v{__version__}":
+                problems.append(f"{path.name} line {number}: {workflow}@{ref or '?'}{rest}")
+    if problems:
+        raise CallerError(f"every {repository} pin must be @{sha} # v{__version__} (half-upgraded or "
+                          "hand-edited):\n  " + "\n  ".join(problems))
+    print(f"{count} store-release pin(s) are {sha} # v{__version__}")

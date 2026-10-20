@@ -1,0 +1,159 @@
+# iOS release, stage 4 (job "app-store-connect"): listing, What's New, screenshots,
+# product page header and search results images, build selection and review
+# submission, each behind its switch. Re-runnable: it only changes what differs.
+name: "store-release: iOS App Store Connect"
+
+on:
+  workflow_call:
+    inputs:
+      config:
+        description: The app's store-release.toml, relative to its repository root.
+        type: string
+        default: store/store-release.toml
+      gates:
+        description: The gate jobs' results, "<job>=<result>" separated by spaces.
+        type: string
+        required: true
+      marketing_version:
+        type: string
+        required: true
+      build_number:
+        description: This run's build number (may be empty without IOS_UPLOAD_BUILD).
+        type: string
+        required: true
+      build_id:
+        description: This run's processed build (empty without IOS_UPLOAD_BUILD).
+        type: string
+        required: true
+      upload_build:
+        type: string
+        required: true
+      listing:
+        type: string
+        required: true
+      whats_new:
+        type: string
+        required: true
+      screenshots:
+        type: string
+        required: true
+      creative:
+        type: string
+        required: true
+      submit:
+        type: string
+        required: true
+      public_release:
+        type: string
+        required: true
+      tool_sha:
+        type: string
+        required: true
+    secrets:
+      APP_STORE_CONNECT_API_KEY_ID:
+        required: true
+      APP_STORE_CONNECT_ISSUER_ID:
+        required: true
+      APP_STORE_CONNECT_API_KEY_P8:
+        required: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  app-store-connect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      MARKETING_VERSION: ${{ inputs.marketing_version }}
+      BUILD_ID: ${{ inputs.build_id }}
+      BUILD_NUMBER: ${{ inputs.build_number }}
+      UPLOAD_LISTING: ${{ inputs.listing }}
+      UPLOAD_WHATS_NEW: ${{ inputs.whats_new }}
+      UPLOAD_SCREENSHOTS: ${{ inputs.screenshots }}
+      UPLOAD_CREATIVE_ASSETS: ${{ inputs.creative }}
+      SUBMIT_IOS_REVIEW: ${{ inputs.submit }}
+      PUBLIC_RELEASE: ${{ inputs.public_release }}
+    steps:
+      - name: Check App Store Connect secrets are set
+        env:
+          HAS_APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID != '' }}
+          HAS_APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID != '' }}
+          HAS_APP_STORE_CONNECT_API_KEY_P8: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 != '' }}
+        run: |
+          set -euo pipefail
+          missing=()
+          for name in APP_STORE_CONNECT_API_KEY_ID APP_STORE_CONNECT_ISSUER_ID APP_STORE_CONNECT_API_KEY_P8; do
+            has="HAS_$name"; [ "${!has}" = true ] || missing+=("$name")
+          done
+          [ "${#missing[@]}" -eq 0 ] || { echo "error: missing secret(s): ${missing[*]}" >&2; exit 1; }
+      - name: Check out the app's store-release config
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: app
+          persist-credentials: false
+          filter: blob:none
+          sparse-checkout-cone-mode: false
+          sparse-checkout: /${{ inputs.config }}
+      - name: Check out store-release at this workflow's commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .store-release
+          persist-credentials: false
+      - name: Set up this job
+        uses: ./.store-release/.github/actions/job-setup
+        with:
+          job: ios-app-store-connect
+          config: ${{ inputs.config }}
+          tool-sha: ${{ job.workflow_sha }}
+          expected-tool-sha: ${{ inputs.tool_sha }}
+      - name: Check this stage's inputs
+        env:
+          INPUT_GATES: ${{ inputs.gates }}
+          INPUT_UPLOAD_BUILD: ${{ inputs.upload_build }}
+        run: >-
+          python3 -I -u .store-release/run.py --app-root app stage check --stage ios-app-store-connect --gates "$INPUT_GATES"
+          --marketing-version "$MARKETING_VERSION" --build-number "$BUILD_NUMBER" --build-id "$BUILD_ID"
+          --upload-build "$INPUT_UPLOAD_BUILD" --listing "$UPLOAD_LISTING" --whats-new "$UPLOAD_WHATS_NEW"
+          --screenshots "$UPLOAD_SCREENSHOTS" --creative "$UPLOAD_CREATIVE_ASSETS"
+          --submit "$SUBMIT_IOS_REVIEW" --public-release "$PUBLIC_RELEASE"
+      - name: Install store tooling
+        run: python3 -m pip install --disable-pip-version-check --require-hashes -r .store-release/requirements.txt
+      # Each text is read only when its switch is on, so unused text never blocks a release.
+      - name: Prepare listing text and What's New (local only)
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/store-meta"
+          if [ "$UPLOAD_LISTING" = true ]; then
+            python3 -I -u .store-release/run.py --app-root app listing prepare --platform ios --out "$RUNNER_TEMP/store-meta"
+          fi
+          if [ "$UPLOAD_WHATS_NEW" = true ]; then
+            python3 -I -u .store-release/run.py --app-root app whats-new prepare --platform ios --tag "$GITHUB_REF_NAME" --out "$RUNNER_TEMP/store-meta"
+          fi
+      - name: Stage App Store screenshots
+        if: inputs.screenshots == 'true'
+        env:
+          STORE_UPLOAD_SCREENSHOTS: "true"
+        run: python3 -I -u .store-release/run.py --app-root app screenshots stage --platform ios --out "$RUNNER_TEMP/store-release/screenshots"
+      - name: Listing / What's New / screenshots / creative assets / review (gated)
+        env:
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_API_KEY_P8: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}
+        run: |
+          set -euo pipefail
+          args=(--metadata-dir "$RUNNER_TEMP/store-meta"
+                --screenshots-dir "$RUNNER_TEMP/store-release/screenshots/ios"
+                --version "$MARKETING_VERSION")
+          if [ -n "$BUILD_ID" ]; then
+            args+=(--build-id "$BUILD_ID" --build-number "$BUILD_NUMBER")
+          fi
+          python3 -I -u .store-release/run.py --app-root app ios store-step "${args[@]}"

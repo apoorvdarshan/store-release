@@ -1,0 +1,143 @@
+# An app's pull request and main checks (job "checks"), called by its
+# store-checks.yml. Never uploads anything and calls no store API: switches,
+# store-release's own tests, every file the config names, the catalog, listing and
+# What's New text, screenshot staging, the project's export compliance and
+# versions, the callers and their pins, and whether this version is yanked.
+name: "store-release: store checks"
+
+on:
+  workflow_call:
+    inputs:
+      config:
+        description: The app's store-release.toml, relative to its repository root.
+        type: string
+        default: store/store-release.toml
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the app's store-release config
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: app
+          persist-credentials: false
+          filter: blob:none
+          sparse-checkout-cone-mode: false
+          sparse-checkout: /${{ inputs.config }}
+      - name: Check out store-release at this workflow's commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .store-release
+          persist-credentials: false
+      - name: Set up this job
+        uses: ./.store-release/.github/actions/job-setup
+        with:
+          job: checks
+          config: ${{ inputs.config }}
+          tool-sha: ${{ job.workflow_sha }}
+      - name: Print gates (must stay safe by default)
+        env:
+          ANDROID_RELEASE_AUTOMATION: ${{ vars.ANDROID_RELEASE_AUTOMATION }}
+          ANDROID_UPLOAD_LISTING: ${{ vars.ANDROID_UPLOAD_LISTING }}
+          ANDROID_UPLOAD_WHATS_NEW: ${{ vars.ANDROID_UPLOAD_WHATS_NEW }}
+          ANDROID_UPLOAD_SCREENSHOTS: ${{ vars.ANDROID_UPLOAD_SCREENSHOTS }}
+          ANDROID_INTERNAL_TESTING: ${{ vars.ANDROID_INTERNAL_TESTING }}
+          ANDROID_CLOSED_TESTING: ${{ vars.ANDROID_CLOSED_TESTING }}
+          ANDROID_PRODUCTION_ROLLOUT: ${{ vars.ANDROID_PRODUCTION_ROLLOUT }}
+          IOS_RELEASE_AUTOMATION: ${{ vars.IOS_RELEASE_AUTOMATION }}
+          IOS_CREATE_VERSION: ${{ vars.IOS_CREATE_VERSION }}
+          IOS_UPLOAD_BUILD: ${{ vars.IOS_UPLOAD_BUILD }}
+          IOS_UPLOAD_LISTING: ${{ vars.IOS_UPLOAD_LISTING }}
+          IOS_UPLOAD_WHATS_NEW: ${{ vars.IOS_UPLOAD_WHATS_NEW }}
+          IOS_UPLOAD_SCREENSHOTS: ${{ vars.IOS_UPLOAD_SCREENSHOTS }}
+          IOS_UPLOAD_CREATIVE_ASSETS: ${{ vars.IOS_UPLOAD_CREATIVE_ASSETS }}
+          IOS_SUBMIT_REVIEW: ${{ vars.IOS_SUBMIT_REVIEW }}
+          IOS_PUBLIC_RELEASE: ${{ vars.IOS_PUBLIC_RELEASE }}
+          STORE_SYNC_REVENUECAT: ${{ vars.STORE_SYNC_REVENUECAT }}
+        run: python3 -I -u .store-release/run.py print-switches --platform all
+      - name: Test the store release tooling (offline, stdlib only)
+        run: python3 -I -u .store-release/run.py selftest --platform all
+      - name: Check every file the config names
+        run: python3 -I -u .store-release/run.py --app-root app config check --files
+      - name: Validate IAP / subscription / tip catalog
+        run: python3 -I -u .store-release/run.py --app-root app catalog check
+      - name: Prepare What's New (dry-run)
+        run: python3 -I -u .store-release/run.py --app-root app whats-new prepare --platform all --tag dry-run --out "$RUNNER_TEMP/whatsnew"
+      - name: Prepare listing text (dry-run)
+        run: python3 -I -u .store-release/run.py --app-root app listing prepare --platform all --out "$RUNNER_TEMP/listing"
+      - name: Prepare the metadata layout (no store APIs)
+        run: |
+          set -euo pipefail
+          python3 -I -u .store-release/run.py --app-root app listing prepare --platform all --out "$RUNNER_TEMP/store-meta"
+          python3 -I -u .store-release/run.py --app-root app whats-new prepare --platform all --tag dry-run --out "$RUNNER_TEMP/store-meta"
+          python3 -I -u .store-release/run.py --app-root app screenshots stage --dry-run --out "$RUNNER_TEMP/store-release/screenshots"
+      - name: Validate ASC / Play publisher steps (dry-run, no network)
+        run: |
+          set -euo pipefail
+          UPLOAD_LISTING=true UPLOAD_WHATS_NEW=true SUBMIT_IOS_REVIEW=true PUBLIC_RELEASE=false \
+            python3 -I -u .store-release/run.py --app-root app ios store-step --dry-run --metadata-dir "$RUNNER_TEMP/store-meta" --build-id DRY-RUN --build-number 1
+          UPLOAD_CREATIVE_ASSETS=true python3 -I -u .store-release/run.py --app-root app ios store-step --dry-run
+          UPLOAD_LISTING=true python3 -I -u .store-release/run.py --app-root app android play-listing --dry-run --metadata-dir "$RUNNER_TEMP/store-meta"
+      - name: RevenueCat catalog dry-run
+        env:
+          STORE_SYNC_REVENUECAT: "false"
+        run: python3 -I -u .store-release/run.py --app-root app revenuecat-gate
+      - name: Check the project version, export compliance and gradle version
+        run: |
+          set -euo pipefail
+          python3 -I -u .store-release/run.py --app-root app ios project-version --setting MARKETING_VERSION
+          python3 -I -u .store-release/run.py --app-root app ios project-version --setting CURRENT_PROJECT_VERSION
+          python3 -I -u .store-release/run.py --app-root app ios export-compliance --project
+          python3 -I -u .store-release/run.py --app-root app android gradle-version
+      - name: Check release notes headings
+        run: python3 -I -u .store-release/run.py --app-root app release-notes --check-headings
+      # Release jobs install this hash-locked set before touching a store, so a broken
+      # pin (for example a Dependabot bump) fails here instead of in a release.
+      - name: Install and import the store tooling (no store calls)
+        run: |
+          set -euo pipefail
+          python3 -m pip install --disable-pip-version-check --require-hashes \
+            -r .store-release/requirements.txt -r .store-release/requirements-checks.txt
+          python3 -m pip check
+          python3 -I -u .store-release/run.py smoke
+      # Release runs stage screenshots with Pillow, which fits frames onto each set's size.
+      - name: Test screenshot staging with Pillow (offline)
+        run: python3 -I -u .store-release/run.py selftest --pillow-only --require-pillow
+      - name: Stage every screenshot set for upload (Pillow, no store APIs)
+        env:
+          STORE_UPLOAD_SCREENSHOTS: "true"
+        run: python3 -I -u .store-release/run.py --app-root app screenshots stage --platform all --out "$RUNNER_TEMP/staged-for-upload"
+      - name: Check the callers and their pins
+        env:
+          TOOL_SHA: ${{ job.workflow_sha }}
+          TOOL_REPOSITORY: ${{ job.workflow_repository }}
+        run: |
+          set -euo pipefail
+          python3 -I -u .store-release/run.py --app-root app caller check --pr
+          python3 -I -u .store-release/run.py --app-root app pins check
+      - name: Refuse a yanked store-release version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TOOL_REPOSITORY: ${{ job.workflow_repository }}
+        run: python3 -I -u .store-release/run.py yanked check
+      - name: Upload prepared artifacts (inspection only)
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: store-metadata-dry-run
+          path: |
+            ${{ runner.temp }}/whatsnew
+            ${{ runner.temp }}/listing
+          if-no-files-found: error

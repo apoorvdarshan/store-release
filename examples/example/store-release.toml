@@ -1,0 +1,71 @@
+# A second, non-Fud AI config the tests use: it proves nothing app-specific is
+# hard-coded. No catalog, no iPhone Duo or Apple Watch set, other tag prefixes,
+# titles and asset names.
+schema = 1
+
+[app]
+name = "Example"
+slug = "example"
+
+[ios]
+tag_prefix = "v"
+bundle_id = "com.example.app"
+asc_app_id = "1234567890"
+team_id = "ABCDE12345"
+project = "Example.xcodeproj"
+scheme = "Example"
+app_target = "Example"
+info_plist = "Example/Info.plist"
+gate_jobs = [
+  { id = "tests", uses = "./.github/workflows/ios-tests.yml" },
+]
+
+[ios.build]
+developer_dir = "/Applications/Xcode_27.app/Contents/Developer"
+checkout = ["/Example/", "/Example.xcodeproj/"]
+
+[ios.listing]
+markdown = "APPSTORE.md"
+
+[ios.whats_new]
+heading = "What's New"
+
+[[ios.screenshots.sets]]
+display_type = "APP_IPHONE_67"
+dir = "store/screenshots/iphone"
+required = true
+
+[[ios.screenshots.sets]]
+display_type = "APP_IPAD_PRO_3GEN_129"
+dir = "store/screenshots/ipad"
+required = true
+
+[ios.creative]
+dir = "store/creative/ios"
+
+[ios.products]
+
+[ios.github_release]
+title = "Example {version}"
+
+[android]
+tag_prefix = "android-v"
+package = "com.example.app"
+upload_cert_sha256 = "16e8bd3d131d67e7160d1a3040a250a9bfa5bf8abeadfc217991c8fc0a9dd178"
+gate_jobs = [
+  { id = "tests", uses = "./.github/workflows/android-tests.yml" },
+]
+
+[android.build]
+checkout = ["/android/"]
+signing = "keystore-properties"
+
+[android.listing]
+
+[android.whats_new]
+
+[android.screenshots]
+dir = "store/screenshots/play"
+
+[android.github_release]
+asset_name = "{slug}-android-{version}-{version_code}"

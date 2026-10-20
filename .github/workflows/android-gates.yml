@@ -1,0 +1,163 @@
+# Android release, stage 1 (job "gates"): resolves the ANDROID_* switches and checks,
+# read-only and before anything is built, the release notes, What's New, listing
+# text and that this versionCode is new to GitHub Releases and Google Play. With
+# ANDROID_RELEASE_AUTOMATION off a tag resolves build=false: a green no-op.
+name: "store-release: Android gates"
+
+on:
+  workflow_call:
+    inputs:
+      config:
+        description: The app's store-release.toml, relative to its repository root.
+        type: string
+        default: store/store-release.toml
+    secrets:
+      PLAY_SERVICE_ACCOUNT_JSON:
+        required: false
+    outputs:
+      mode:
+        description: release (tag push) or validate (manual dispatch).
+        value: ${{ jobs.gates.outputs.mode }}
+      build:
+        value: ${{ jobs.gates.outputs.build }}
+      github_release:
+        value: ${{ jobs.gates.outputs.github_release }}
+      listing:
+        value: ${{ jobs.gates.outputs.listing }}
+      whats_new:
+        value: ${{ jobs.gates.outputs.whats_new }}
+      screenshots:
+        value: ${{ jobs.gates.outputs.screenshots }}
+      production:
+        value: ${{ jobs.gates.outputs.production }}
+      play_upload:
+        value: ${{ jobs.gates.outputs.play_upload }}
+      play_tracks:
+        value: ${{ jobs.gates.outputs.play_tracks }}
+      tool_sha:
+        description: The store-release commit every later job of this run must use.
+        value: ${{ jobs.gates.outputs.tool_sha }}
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read # the Play check reads this run's earlier attempts
+    outputs:
+      mode: ${{ steps.gates.outputs.mode }}
+      build: ${{ steps.gates.outputs.build }}
+      github_release: ${{ steps.gates.outputs.github_release }}
+      listing: ${{ steps.gates.outputs.listing }}
+      whats_new: ${{ steps.gates.outputs.whats_new }}
+      screenshots: ${{ steps.gates.outputs.screenshots }}
+      production: ${{ steps.gates.outputs.production }}
+      play_upload: ${{ steps.gates.outputs.play_upload }}
+      play_tracks: ${{ steps.gates.outputs.play_tracks }}
+      tool_sha: ${{ steps.tool.outputs.tool_sha }}
+    steps:
+      - name: Check out the app's store-release config
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: app
+          persist-credentials: false
+          filter: blob:none
+          sparse-checkout-cone-mode: false
+          sparse-checkout: /${{ inputs.config }}
+      - name: Check out store-release at this workflow's commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .store-release
+          persist-credentials: false
+      - name: Set up this job
+        uses: ./.store-release/.github/actions/job-setup
+        with:
+          job: android-gates
+          config: ${{ inputs.config }}
+          tool-sha: ${{ job.workflow_sha }}
+      - name: Record the store-release commit
+        id: tool
+        env:
+          TOOL_SHA: ${{ job.workflow_sha }}
+        run: echo "tool_sha=$TOOL_SHA" >> "$GITHUB_OUTPUT"
+      - name: Test the store release tooling (offline)
+        run: python3 -I -u .store-release/run.py selftest --platform android
+      - name: Check the caller workflow
+        env:
+          TOOL_SHA: ${{ job.workflow_sha }}
+          TOOL_REPOSITORY: ${{ job.workflow_repository }}
+        run: python3 -I -u .store-release/run.py --app-root app caller check --runtime --platform android
+      - name: Warn when this store-release version is yanked
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TOOL_REPOSITORY: ${{ job.workflow_repository }}
+        run: python3 -I -u .store-release/run.py yanked check --warn-only
+      - name: Resolve Android release switches
+        id: gates
+        env:
+          ANDROID_RELEASE_AUTOMATION: ${{ vars.ANDROID_RELEASE_AUTOMATION }}
+          ANDROID_UPLOAD_LISTING: ${{ vars.ANDROID_UPLOAD_LISTING }}
+          ANDROID_UPLOAD_WHATS_NEW: ${{ vars.ANDROID_UPLOAD_WHATS_NEW }}
+          ANDROID_UPLOAD_SCREENSHOTS: ${{ vars.ANDROID_UPLOAD_SCREENSHOTS }}
+          ANDROID_INTERNAL_TESTING: ${{ vars.ANDROID_INTERNAL_TESTING }}
+          ANDROID_CLOSED_TESTING: ${{ vars.ANDROID_CLOSED_TESTING }}
+          ANDROID_PRODUCTION_ROLLOUT: ${{ vars.ANDROID_PRODUCTION_ROLLOUT }}
+        run: python3 -I -u .store-release/run.py --app-root app android gates
+      # Fail before the long quality run when the notes are malformed (a missing
+      # section is fine: GitHub generates the notes), or when What's New or the
+      # listing is switched on without listing text that fits Google Play.
+      - name: Check reviewed release notes, What's New and listing text
+        if: steps.gates.outputs.github_release == 'true'
+        env:
+          WHATS_NEW: ${{ steps.gates.outputs.whats_new }}
+          LISTING: ${{ steps.gates.outputs.listing }}
+        run: |
+          set -euo pipefail
+          python3 -I -u .store-release/run.py --app-root app release-notes --if-present "$GITHUB_REF_NAME" > /dev/null
+          if [ "$WHATS_NEW" = true ]; then
+            python3 -I -u .store-release/run.py --app-root app whats-new prepare --platform play --tag "$GITHUB_REF_NAME" --out "$RUNNER_TEMP/whats-new-check"
+            [ -s "$RUNNER_TEMP/whats-new-check/play/whatsnew-$STORE_RELEASE_ANDROID_LOCALE" ] || {
+              echo "error: ANDROID_UPLOAD_WHATS_NEW is on, but the Play listing doc has no <$STORE_RELEASE_ANDROID_LOCALE> What's New" >&2
+              exit 1
+            }
+          fi
+          if [ "$LISTING" = true ]; then
+            python3 -I -u .store-release/run.py --app-root app listing prepare --platform play --out "$RUNNER_TEMP/listing-check"
+          fi
+      # Read-only. The GitHub Release APK must install over every earlier one.
+      - name: Check this versionCode is new to GitHub Releases (read-only)
+        if: steps.gates.outputs.github_release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 1000 --json tagName,name > "$RUNNER_TEMP/releases.json"
+          python3 -I -u .store-release/run.py --app-root app android github-preflight --releases "$RUNNER_TEMP/releases.json"
+      - name: Check the Play service account secret is set
+        if: steps.gates.outputs.play_upload == 'true'
+        env:
+          HAS_PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON != '' }}
+        run: python3 -I -u .store-release/run.py --app-root app secrets check PLAY_SERVICE_ACCOUNT_JSON
+      - name: Install store tooling
+        if: steps.gates.outputs.play_upload == 'true'
+        run: python3 -m pip install --disable-pip-version-check --require-hashes -r .store-release/requirements.txt
+      # Read-only (a throwaway Play edit that is deleted). Play rejects a versionCode
+      # it has seen, so stop here, before quality and the build, unless it is new.
+      - name: Check this versionCode is new to Google Play (read-only)
+        if: steps.gates.outputs.play_upload == 'true'
+        env:
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          PLAY_TRACKS: ${{ steps.gates.outputs.play_tracks }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 -I -u .store-release/run.py --app-root app android play-preflight --tracks "$PLAY_TRACKS"

@@ -1,0 +1,8 @@
+# Python lint for store-release's own code (the lint CI job). Syntax errors and
+# pyflakes rules only; formatting is left alone. The vendored fud-ai scripts are
+# verbatim copies and are not linted.
+target-version = "py313"
+extend-exclude = ["tests/parity/upstream_fud_ai_a99591908"]
+
+[lint]
+select = ["E9", "F"]
