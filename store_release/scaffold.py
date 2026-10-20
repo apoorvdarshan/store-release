@@ -10,9 +10,9 @@ The config is validated before anything is written, and existing files are never
 overwritten without --force. Only the standard flow is scaffolded: ported flows exist
 for the apps they were ported from (docs/flows.md).
 
-Nothing is uploaded and no switch is turned on: every switch defaults to off, so the
-first release run after `init` creates GitHub Releases only. The printed next steps
-name the secrets and variables to set.
+Nothing is uploaded and no switch is turned on: every switch defaults to off, so a tag
+pushed before any switch is set changes no store (an iOS tag still gets its GitHub
+Release). The printed next steps name the secrets and variables to set.
 """
 from __future__ import annotations
 

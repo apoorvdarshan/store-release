@@ -1,6 +1,6 @@
-# A second, non-Fud AI config the tests use: it proves nothing app-specific is
-# hard-coded. No catalog, no iPhone Duo or Apple Watch set, other tag prefixes,
-# titles and asset names.
+# A config of no real app that the tests use: with other tag prefixes, titles and asset
+# names than the apps' configs, and no catalog, iPhone Duo or Apple Watch set, it proves
+# nothing app-specific is hard-coded.
 schema = 1
 
 [app]
