@@ -1,0 +1,39 @@
+name: store-release job setup
+description: >-
+  Internal to store-release. Python 3.13, the tooling identity check, the app's
+  store-release.toml and this job's sparse checkout of the app.
+inputs:
+  job:
+    description: The paths job id (ios-prepare, ios-build, ...).
+    required: true
+  config:
+    description: The app's config path, relative to its repository root.
+    required: true
+  tool-sha:
+    description: The calling job's job.workflow_sha.
+    required: true
+  expected-tool-sha:
+    description: The tool_sha output of this run's prepare or gates job (empty in that job).
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      with:
+        python-version: "3.13"
+    - name: Check the tooling, the config and this job's files
+      shell: bash
+      env:
+        TOOL_SHA: ${{ inputs.tool-sha }}
+        EXPECTED_TOOL_SHA: ${{ inputs.expected-tool-sha }}
+        SETUP_JOB: ${{ inputs.job }}
+        SETUP_CONFIG: ${{ inputs.config }}
+      run: |
+        set -euo pipefail
+        tool=(python3 -I -u .store-release/run.py --app-root app --config "$SETUP_CONFIG")
+        "${tool[@]}" tool check --tool-sha "$TOOL_SHA" --expected "$EXPECTED_TOOL_SHA"
+        "${tool[@]}" config check
+        "${tool[@]}" paths --job "$SETUP_JOB" > "$RUNNER_TEMP/store-release-paths.txt"
+        git -C app sparse-checkout set --no-cone --stdin < "$RUNNER_TEMP/store-release-paths.txt"
+        "${tool[@]}" config export --job "$SETUP_JOB"

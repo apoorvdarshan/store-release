@@ -1,0 +1,71 @@
+# Android validation runs only (job "store-plan"): read-only and report-only. Prints
+# what a tag run would change on Google Play and GitHub Releases with the current
+# switches. Without the Play key it still plans the GitHub part.
+name: "store-release: Android store plan"
+
+on:
+  workflow_call:
+    inputs:
+      config:
+        description: The app's store-release.toml, relative to its repository root.
+        type: string
+        default: store/store-release.toml
+      tool_sha:
+        type: string
+        required: true
+    secrets:
+      PLAY_SERVICE_ACCOUNT_JSON:
+        required: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  store-plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the app's store-release config
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: app
+          persist-credentials: false
+          filter: blob:none
+          sparse-checkout-cone-mode: false
+          sparse-checkout: /${{ inputs.config }}
+      - name: Check out store-release at this workflow's commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .store-release
+          persist-credentials: false
+      - name: Set up this job
+        uses: ./.store-release/.github/actions/job-setup
+        with:
+          job: android-store-plan
+          config: ${{ inputs.config }}
+          tool-sha: ${{ job.workflow_sha }}
+          expected-tool-sha: ${{ inputs.tool_sha }}
+      - name: Check this stage's inputs
+        run: python3 -I -u .store-release/run.py --app-root app stage check --stage android-store-plan
+      - name: Install store tooling
+        run: python3 -m pip install --disable-pip-version-check --require-hashes -r .store-release/requirements.txt
+      - name: Plan what a tag run would change on Google Play and GitHub (read-only)
+        env:
+          ANDROID_RELEASE_AUTOMATION: ${{ vars.ANDROID_RELEASE_AUTOMATION }}
+          ANDROID_UPLOAD_LISTING: ${{ vars.ANDROID_UPLOAD_LISTING }}
+          ANDROID_UPLOAD_WHATS_NEW: ${{ vars.ANDROID_UPLOAD_WHATS_NEW }}
+          ANDROID_UPLOAD_SCREENSHOTS: ${{ vars.ANDROID_UPLOAD_SCREENSHOTS }}
+          ANDROID_INTERNAL_TESTING: ${{ vars.ANDROID_INTERNAL_TESTING }}
+          ANDROID_CLOSED_TESTING: ${{ vars.ANDROID_CLOSED_TESTING }}
+          ANDROID_PRODUCTION_ROLLOUT: ${{ vars.ANDROID_PRODUCTION_ROLLOUT }}
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -I -u .store-release/run.py --app-root app android plan --work-dir "$RUNNER_TEMP/store-plan"

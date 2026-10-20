@@ -1,0 +1,115 @@
+# iOS release, stage 3 (job "wait-for-build"): polls App Store Connect until the build
+# this run uploaded is processed. Its own job, so "Re-run failed jobs" after a later
+# failure keeps its build_id instead of waiting again against the upload deadline.
+name: "store-release: iOS wait for build"
+
+on:
+  workflow_call:
+    inputs:
+      config:
+        description: The app's store-release.toml, relative to its repository root.
+        type: string
+        default: store/store-release.toml
+      marketing_version:
+        type: string
+        required: true
+      build_number:
+        type: string
+        required: true
+      upload_started_at:
+        type: string
+        required: true
+      wait_minutes:
+        type: string
+        required: true
+      poll_seconds:
+        type: string
+        required: true
+      tool_sha:
+        type: string
+        required: true
+    secrets:
+      APP_STORE_CONNECT_API_KEY_ID:
+        required: true
+      APP_STORE_CONNECT_ISSUER_ID:
+        required: true
+      APP_STORE_CONNECT_API_KEY_P8:
+        required: true
+    outputs:
+      build_id:
+        description: The App Store Connect id of this run's processed build.
+        value: ${{ jobs.wait-for-build.outputs.build_id }}
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  wait-for-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 310 # covers IOS_BUILD_WAIT_MINUTES (max 300), counted from upload start
+    permissions:
+      contents: read
+    outputs:
+      build_id: ${{ steps.wait.outputs.build_id }}
+    env:
+      MARKETING_VERSION: ${{ inputs.marketing_version }}
+      BUILD_NUMBER: ${{ inputs.build_number }}
+      UPLOAD_STARTED_AT: ${{ inputs.upload_started_at }}
+      WAIT_MINUTES: ${{ inputs.wait_minutes }}
+      POLL_SECONDS: ${{ inputs.poll_seconds }}
+    steps:
+      - name: Check App Store Connect secrets are set
+        env:
+          HAS_APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID != '' }}
+          HAS_APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID != '' }}
+          HAS_APP_STORE_CONNECT_API_KEY_P8: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 != '' }}
+        run: |
+          set -euo pipefail
+          missing=()
+          for name in APP_STORE_CONNECT_API_KEY_ID APP_STORE_CONNECT_ISSUER_ID APP_STORE_CONNECT_API_KEY_P8; do
+            has="HAS_$name"; [ "${!has}" = true ] || missing+=("$name")
+          done
+          [ "${#missing[@]}" -eq 0 ] || { echo "error: missing secret(s): ${missing[*]}" >&2; exit 1; }
+      - name: Check out the app's store-release config
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: app
+          persist-credentials: false
+          filter: blob:none
+          sparse-checkout-cone-mode: false
+          sparse-checkout: /${{ inputs.config }}
+      - name: Check out store-release at this workflow's commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .store-release
+          persist-credentials: false
+      - name: Set up this job
+        uses: ./.store-release/.github/actions/job-setup
+        with:
+          job: ios-wait-for-build
+          config: ${{ inputs.config }}
+          tool-sha: ${{ job.workflow_sha }}
+          expected-tool-sha: ${{ inputs.tool_sha }}
+      - name: Check this stage's inputs
+        run: >-
+          python3 -I -u .store-release/run.py --app-root app stage check --stage ios-wait-for-build --marketing-version "$MARKETING_VERSION"
+          --build-number "$BUILD_NUMBER" --upload-started-at "$UPLOAD_STARTED_AT"
+          --wait-minutes "$WAIT_MINUTES" --poll-seconds "$POLL_SECONDS"
+      - name: Install store tooling
+        run: python3 -m pip install --disable-pip-version-check --require-hashes -r .store-release/requirements.txt
+      # -u: each poll's progress line shows in the live log right away.
+      - name: Wait for App Store Connect to process this build
+        id: wait
+        env:
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_API_KEY_P8: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}
+        run: >-
+          python3 -I -u .store-release/run.py --app-root app ios wait-build --version "$MARKETING_VERSION" --build "$BUILD_NUMBER"
+          --started-at "$UPLOAD_STARTED_AT" --wait-minutes "$WAIT_MINUTES" --poll-seconds "$POLL_SECONDS"

@@ -1,12 +1,20 @@
-# store-release's own CI. Bootstrap placeholder: these jobs pass without running a
-# suite, so their check names exist from the first commit; the suites land with the
-# tooling.
+# store-release's own CI. Pull requests, main, a weekly run and manual runs. A
+# newer push to a pull request cancels its older run; main, scheduled and manual
+# runs are never cancelled.
+#
+#   test (stdlib)    the unit suite without the lock (only "needs Pillow" skips allowed)
+#   test (strict)    both locks; unit, fixture apps, fud-ai parity and workflow tests; no skip
+#   test (macos)     the release-path profiles on macOS (the build job's stdlib-only code)
+#   lint             Python lint (ruff, pyflakes rules)
+#   workflows        actionlint on these workflows and on the rendered fud-ai callers
 name: CI
 
 on:
   pull_request:
   push:
     branches: [main]
+  schedule:
+    - cron: "41 2 * * 1"
   workflow_dispatch:
 
 permissions:
@@ -16,43 +24,130 @@ concurrency:
   group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   test-stdlib:
     name: test (stdlib)
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
-      - name: No suite yet
-        run: echo "bootstrap placeholder, the unit suite lands with the tooling"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Unit suite, standard library only
+        run: python3 -I -u run.py selftest --platform all
 
   test-strict:
     name: test (strict)
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 20
     steps:
-      - name: No suite yet
-        run: echo "bootstrap placeholder, the strict suites land with the tooling"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install both locks
+        run: |
+          set -euo pipefail
+          python3 -m pip install --disable-pip-version-check --require-hashes \
+            -r requirements.txt -r requirements-checks.txt
+          python3 -m pip check
+      - name: Every suite, no skip allowed
+        env:
+          STORE_RELEASE_TESTS_STRICT: "1"
+        run: >-
+          python3 -I -u run.py selftest --platform all --suite unit --suite apps --suite parity --suite workflows
+          --require-pillow --strict
 
   test-macos:
     name: test (macos)
     runs-on: macos-15
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
-      - name: No suite yet
-        run: echo "bootstrap placeholder, the macOS profiles land with the tooling"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: The release-path profiles (stdlib only)
+        run: |
+          set -euo pipefail
+          python3 -I -u run.py selftest --platform ios
+          python3 -I -u run.py selftest --platform android
 
   lint:
     name: lint
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
-      - name: Nothing to lint yet
-        run: echo "bootstrap placeholder, Python lint lands with the tooling"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install the lint lock
+        run: python3 -m pip install --disable-pip-version-check --require-hashes -r requirements-lint.txt
+      - name: Lint (ruff, pyflakes rules)
+        run: python3 -m ruff check --output-format github .
 
   workflows:
     name: workflows
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
-      - name: No workflow checks yet
-        run: echo "bootstrap placeholder, actionlint lands with the reusable workflows"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install actionlint 1.7.12 (checksum-pinned)
+        env:
+          ACTIONLINT_VERSION: "1.7.12"
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/actionlint.tar.gz"
+          curl -fsSL -o "$archive" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  $archive" | sha256sum -c -
+          tar -xzf "$archive" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" -version
+          shellcheck --version | head -2
+      # actionlint 1.7.12 does not know job.workflow_sha / job.workflow_repository yet
+      # (documented contexts); drop this ignore once it does. Any other finding fails.
+      - name: Lint this repository's workflows
+        run: >-
+          "$RUNNER_TEMP/actionlint" -color
+          -ignore 'property "workflow_(sha|repository)" is not defined in object type'
+      # The callers live in app repositories: render fud-ai's into a scratch repository with
+      # stub local workflows, so their local references resolve. actionlint 1.7.12 does not
+      # know concurrency.queue yet (documented); drop the ignore once it does.
+      - name: Lint the rendered fud-ai callers
+        run: |
+          set -euo pipefail
+          repo="$RUNNER_TEMP/callers"
+          mkdir -p "$repo/.github/workflows"
+          git -C "$repo" init -q
+          for platform in ios android checks; do
+            case "$platform" in checks) name=store-checks.yml ;; *) name="$platform-release.yml" ;; esac
+            python3 -I -u run.py --app-root examples/fud-ai --config store-release.toml callers render \
+              --platform "$platform" --sha "$GITHUB_SHA" --version 0.1.0 --app-repository apoorvdarshan/fud-ai \
+              --config-in-app store/store-release.toml --out "$repo/.github/workflows/$name"
+          done
+          for stub in ios-tests quality; do
+            printf 'name: %s\non:\n  workflow_call:\npermissions:\n  contents: read\njobs:\n  stub:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo stub\n' \
+              "$stub" > "$repo/.github/workflows/$stub.yml"
+          done
+          cd "$repo"
+          "$RUNNER_TEMP/actionlint" -color -ignore 'unexpected key "queue" for "concurrency" section'

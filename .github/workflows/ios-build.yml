@@ -1,0 +1,280 @@
+# iOS release, stage 2 (job "build"): archives, signs and verifies the app; a release
+# run uploads it to App Store Connect, a validation run exports and validates it
+# with App Store Connect and uploads nothing. Signing material lives only under
+# $RUNNER_TEMP and is removed in an always() step. See docs/workflows.md.
+name: "store-release: iOS build"
+
+on:
+  workflow_call:
+    inputs:
+      config:
+        description: The app's store-release.toml, relative to its repository root.
+        type: string
+        default: store/store-release.toml
+      runner:
+        description: The macOS runner label the archive runs on.
+        type: string
+        default: xcode-27
+      gates:
+        description: The gate jobs' results, "<job>=<result>" separated by spaces.
+        type: string
+        required: true
+      mode:
+        type: string
+        required: true
+      marketing_version:
+        type: string
+        required: true
+      build_number:
+        type: string
+        required: true
+      tool_sha:
+        type: string
+        required: true
+    secrets:
+      APP_STORE_CONNECT_API_KEY_ID:
+        required: true
+      APP_STORE_CONNECT_ISSUER_ID:
+        required: true
+      APP_STORE_CONNECT_API_KEY_P8:
+        required: true
+      IOS_DEV_SIGNING_P12_BASE64:
+        required: true
+      IOS_DEV_SIGNING_P12_PASSWORD:
+        required: true
+    outputs:
+      upload_started_at:
+        description: Epoch seconds when this run started uploading (release runs).
+        value: ${{ jobs.build.outputs.upload_started_at }}
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    env:
+      MODE: ${{ inputs.mode }}
+      MARKETING_VERSION: ${{ inputs.marketing_version }}
+      BUILD_NUMBER: ${{ inputs.build_number }}
+    outputs:
+      upload_started_at: ${{ steps.upload.outputs.started_at }}
+    steps:
+      - name: Check signing and App Store Connect secrets are set
+        env:
+          HAS_APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID != '' }}
+          HAS_APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID != '' }}
+          HAS_APP_STORE_CONNECT_API_KEY_P8: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 != '' }}
+          HAS_IOS_DEV_SIGNING_P12_BASE64: ${{ secrets.IOS_DEV_SIGNING_P12_BASE64 != '' }}
+          HAS_IOS_DEV_SIGNING_P12_PASSWORD: ${{ secrets.IOS_DEV_SIGNING_P12_PASSWORD != '' }}
+        run: |
+          set -euo pipefail
+          missing=()
+          for name in APP_STORE_CONNECT_API_KEY_ID APP_STORE_CONNECT_ISSUER_ID APP_STORE_CONNECT_API_KEY_P8 \
+                      IOS_DEV_SIGNING_P12_BASE64 IOS_DEV_SIGNING_P12_PASSWORD; do
+            has="HAS_$name"; [ "${!has}" = true ] || missing+=("$name")
+          done
+          [ "${#missing[@]}" -eq 0 ] || { echo "error: missing signing secret(s): ${missing[*]}" >&2; exit 1; }
+      - name: Check out the app's store-release config
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: app
+          persist-credentials: false
+          filter: blob:none
+          sparse-checkout-cone-mode: false
+          sparse-checkout: /${{ inputs.config }}
+      - name: Check out store-release at this workflow's commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .store-release
+          persist-credentials: false
+      - name: Set up this job
+        uses: ./.store-release/.github/actions/job-setup
+        with:
+          job: ios-build
+          config: ${{ inputs.config }}
+          tool-sha: ${{ job.workflow_sha }}
+          expected-tool-sha: ${{ inputs.tool_sha }}
+      - name: Check this stage's inputs
+        env:
+          INPUT_GATES: ${{ inputs.gates }}
+          DISPATCH_MARKETING_VERSION: ${{ github.event.inputs.marketing_version }}
+        run: >-
+          python3 -I -u .store-release/run.py --app-root app stage check --stage ios-build --gates "$INPUT_GATES" --mode "$MODE"
+          --marketing-version "$MARKETING_VERSION" --build-number "$BUILD_NUMBER"
+          --dispatch-version "$DISPATCH_MARKETING_VERSION"
+      - name: Select Xcode
+        id: xcode
+        run: python3 -I -u .store-release/run.py --app-root app ios select-xcode
+      - name: Cache pinned Swift packages
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: app/.ios-release-packages
+          key: ${{ steps.xcode.outputs.spm_key }}
+      - name: Check toolchain and inputs
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          [[ "$BUILD_NUMBER" =~ ^[0-9]+$ ]] || { echo "error: no build number from prepare job" >&2; exit 1; }
+          [[ "$MARKETING_VERSION" =~ ^[0-9]+(\.[0-9]+)*$ ]] || { echo "error: bad marketing version" >&2; exit 1; }
+          python3 -I -u .store-release/run.py --app-root app hooks run --stage pre_archive
+      - name: Install signing identity and App Store Connect key
+        env:
+          P12_BASE64: ${{ secrets.IOS_DEV_SIGNING_P12_BASE64 }}
+          P12_PASSWORD: ${{ secrets.IOS_DEV_SIGNING_P12_PASSWORD }}
+          ASC_KEY_P8: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}
+          ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          for name in P12_BASE64 P12_PASSWORD ASC_KEY_P8 ASC_KEY_ID ASC_ISSUER_ID; do
+            [ -n "${!name}" ] || { echo "error: missing signing secret $name" >&2; exit 1; }
+          done
+          umask 077
+          keys="$RUNNER_TEMP/asc-keys"
+          mkdir -p "$keys"
+          python3 -I -c 'import os,sys; open(sys.argv[1],"w").write(os.environ["ASC_KEY_P8"].replace("\\n","\n").strip()+"\n")' \
+            "$keys/AuthKey_${ASC_KEY_ID}.p8"
+          keychain="$RUNNER_TEMP/${STORE_RELEASE_SLUG}-signing.keychain-db"
+          keychain_password="$(openssl rand -hex 24)"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 7200 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          # Apple's WWDR G3 intermediate completes the development identity's chain.
+          curl -fsSL https://www.apple.com/certificateauthority/AppleWWDRCAG3.cer -o "$RUNNER_TEMP/wwdr-g3.cer"
+          echo "dcf21878c77f4198e4b4614f03d696d89c66c66008d4244e1b99161aac91601f  $RUNNER_TEMP/wwdr-g3.cer" | shasum -a 256 -c -
+          security import "$RUNNER_TEMP/wwdr-g3.cer" -k "$keychain" > /dev/null
+          printf '%s' "$P12_BASE64" | base64 --decode > "$RUNNER_TEMP/signing.p12"
+          security import "$RUNNER_TEMP/signing.p12" -k "$keychain" -P "$P12_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          rm -f "${RUNNER_TEMP:?}/signing.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain" > /dev/null
+          read -r -a existing <<< "$(security list-keychains -d user | tr -d '"' | xargs)"
+          security list-keychains -d user -s "$keychain" "${existing[@]}"
+          security find-identity -v -p codesigning "$keychain" | tee "$RUNNER_TEMP/identities.txt"
+          grep -qE '[1-9][0-9]* valid identit' "$RUNNER_TEMP/identities.txt" || { echo "error: no valid signing identity in the CI keychain" >&2; exit 1; }
+          {
+            echo "ASC_KEY_PATH=$keys/AuthKey_${ASC_KEY_ID}.p8"
+            echo "API_PRIVATE_KEYS_DIR=$keys"
+            echo "SIGNING_KEYCHAIN=$keychain"
+          } >> "$GITHUB_ENV"
+      - name: Archive Release
+        working-directory: app
+        env:
+          ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/logs"
+          log="$RUNNER_TEMP/logs/archive.log"
+          status=0
+          xcodebuild archive \
+            -project "$STORE_RELEASE_IOS_PROJECT" \
+            -scheme "$STORE_RELEASE_IOS_SCHEME" \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/$STORE_RELEASE_SLUG.xcarchive" \
+            -derivedDataPath "$RUNNER_TEMP/derived-data" \
+            -clonedSourcePackagesDirPath .ios-release-packages \
+            -onlyUsePackageVersionsFromResolvedFile \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$ASC_KEY_PATH" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            MARKETING_VERSION="$MARKETING_VERSION" \
+            CURRENT_PROJECT_VERSION="$BUILD_NUMBER" > "$log" 2>&1 || status=$?
+          grep -E '(error|warning): |\*\* ARCHIVE' "$log" || true
+          [ "$status" -eq 0 ] || { tail -n 60 "$log"; echo "error: archive failed (full log in artifact)" >&2; exit "$status"; }
+      - name: Verify app identity, version and export compliance in every bundle
+        run: >-
+          python3 -I -u .store-release/run.py --app-root app ios verify-archive --archive "$RUNNER_TEMP/$STORE_RELEASE_SLUG.xcarchive"
+          --version "$MARKETING_VERSION" --build "$BUILD_NUMBER"
+      - name: Write export options
+        run: |
+          set -euo pipefail
+          python3 -I -u .store-release/run.py --app-root app ios export-options --mode "$MODE" --out "$RUNNER_TEMP/ExportOptions.plist"
+          plutil -lint "$RUNNER_TEMP/ExportOptions.plist"
+      - name: Export and validate with App Store Connect (validation run)
+        if: env.MODE == 'validate'
+        env:
+          ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          log="$RUNNER_TEMP/logs/export.log"
+          status=0
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/$STORE_RELEASE_SLUG.xcarchive" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$ASC_KEY_PATH" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID" > "$log" 2>&1 || status=$?
+          grep -E '(error|warning): |\*\* EXPORT' "$log" || true
+          [ "$status" -eq 0 ] || { tail -n 60 "$log"; echo "error: export failed (full log in artifact)" >&2; exit "$status"; }
+          ipa="$(find "$RUNNER_TEMP/export" -maxdepth 1 -name '*.ipa' | head -n1)"
+          [ -n "$ipa" ] || { echo "error: export produced no IPA" >&2; exit 1; }
+          xcrun altool --validate-app -f "$ipa" -t ios \
+            --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID" 2>&1 | tee "$RUNNER_TEMP/logs/validate.log"
+          echo "validated $MARKETING_VERSION ($BUILD_NUMBER) with App Store Connect — nothing uploaded"
+      - name: Upload to App Store Connect (release run)
+        id: upload
+        if: env.MODE == 'release'
+        env:
+          ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          echo "started_at=$(date +%s)" >> "$GITHUB_OUTPUT"
+          log="$RUNNER_TEMP/logs/upload.log"
+          status=0
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/$STORE_RELEASE_SLUG.xcarchive" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$ASC_KEY_PATH" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID" > "$log" 2>&1 || status=$?
+          grep -E '(error|warning): |[Uu]pload|\*\* EXPORT' "$log" || true
+          [ "$status" -eq 0 ] || { tail -n 60 "$log"; echo "error: upload failed (full log in artifact)" >&2; exit "$status"; }
+          echo "uploaded $MARKETING_VERSION ($BUILD_NUMBER); App Store Connect processing is checked next"
+      # xcodebuild, altool and Xcode's distribution logs echo the key and issuer IDs.
+      # Artifacts are not masked like the console and app repositories are public, so
+      # every file is rewritten (binary ones too), and any file that still holds an ID
+      # in another encoding is removed before upload.
+      - name: Collect logs
+        id: collect-logs
+        if: failure()
+        env:
+          ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/logs"
+          find "${TMPDIR:-/tmp}" -maxdepth 1 -name '*.xcdistributionlogs' -exec cp -R {} "$RUNNER_TEMP/logs/" \; 2>/dev/null || true
+          python3 -I -u .store-release/run.py ios redact-logs "$RUNNER_TEMP/logs"
+      - name: Keep build logs
+        # Only logs the redaction step finished with are uploaded.
+        if: failure() && steps.collect-logs.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ios-release-logs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/logs
+          retention-days: 7
+          if-no-files-found: ignore
+      - name: Remove signing material
+        if: always()
+        run: |
+          [ -n "${SIGNING_KEYCHAIN:-}" ] && security delete-keychain "$SIGNING_KEYCHAIN" 2>/dev/null || true
+          rm -rf "${RUNNER_TEMP:?}/asc-keys" "${RUNNER_TEMP:?}/signing.p12" "${RUNNER_TEMP:?}/export" "${RUNNER_TEMP:?}/wwdr-g3.cer"
