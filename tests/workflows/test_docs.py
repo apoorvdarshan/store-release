@@ -15,6 +15,8 @@ DOC_SET = ("config.md", "switches.md", "secrets.md", "workflows.md", "rerun.md",
            "release-process.md", "yanked.md", "provenance.md", "roadmap.md")
 EXAMPLES = (TOOL_ROOT / "examples" / "fud-ai" / "store-release.toml",
             TOOL_ROOT / "examples" / "example" / "store-release.toml")
+# Keys whose value is a table of the app's own names (file paths), documented as one key.
+MAP_KEYS = {"ios.creative.sizes"}
 
 
 def every_switch() -> list[str]:
@@ -27,7 +29,7 @@ def dotted_keys(data: dict, prefix: str = "") -> set[str]:
     keys: set[str] = set()
     for key, value in data.items():
         dotted = f"{prefix}{key}"
-        if isinstance(value, dict) and value:
+        if isinstance(value, dict) and value and dotted not in MAP_KEYS:
             keys |= dotted_keys(value, f"{dotted}.")
         else:
             keys.add(dotted)

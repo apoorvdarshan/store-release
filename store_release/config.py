@@ -45,6 +45,9 @@ ASSET_NAME = re.compile(r"[A-Za-z0-9._-]+")
 
 IOS_TITLE_PLACEHOLDERS = ("version", "build")
 ASSET_NAME_PLACEHOLDERS = ("slug", "version", "version_code")
+EXPORT_COMPLIANCE_ANSWERS = ("NO", "YES")
+# store_release.ios.asc.CREATIVE_SLOTS: each slot folder and the file types it takes.
+CREATIVE_SLOT_SUFFIXES = {"header": (".png",), "search-results": (".png", ".jpg", ".jpeg")}
 
 
 class ConfigError(Exception):
@@ -120,6 +123,10 @@ class Ios:
     creative_dir: str | None = None
     iap_route: str | None = None
     title: str = "iOS {version} (build {build})"
+    # Pins on the app's own files (config check --files and --pinned): the export compliance
+    # answer the project must declare, and the creative images as ("<slot>/<file>", bytes) pairs.
+    export_compliance: str | None = None
+    creative_sizes: tuple[tuple[str, int], ...] | None = None
 
     @property
     def pbxproj(self) -> str:
@@ -414,6 +421,31 @@ def _screenshot_sets(table: _Table | None) -> tuple[ScreenshotSet, ...] | None:
     return tuple(sets)
 
 
+def _creative_sizes(table: _Table) -> tuple[tuple[str, int], ...]:
+    key = table.key("sizes")
+    raw = table.raw("sizes")
+    if not isinstance(raw, dict) or not raw:
+        raise ConfigError(f'{key}: expected a non-empty table of "<slot>/<file>" = <bytes>')
+    pins: list[tuple[str, int]] = []
+    slots: set[str] = set()
+    for relative, size in raw.items():
+        entry = f'{key}."{relative}"'
+        check_path(relative, entry)
+        parts = relative.split("/")
+        if len(parts) != 2 or parts[0] not in CREATIVE_SLOT_SUFFIXES:
+            raise ConfigError(f"{entry}: must be <slot>/<file> with the slot {' or '.join(CREATIVE_SLOT_SUFFIXES)}")
+        slot, name = parts
+        if not name.lower().endswith(CREATIVE_SLOT_SUFFIXES[slot]):
+            raise ConfigError(f"{entry}: the {slot} slot takes {', '.join(CREATIVE_SLOT_SUFFIXES[slot])} files")
+        if slot in slots:
+            raise ConfigError(f"{entry}: the {slot} slot takes one image")
+        slots.add(slot)
+        if isinstance(size, bool) or not isinstance(size, int) or size <= 0:
+            raise ConfigError(f"{entry}: expected the file's size in bytes (a positive integer), got {size!r}")
+        pins.append((relative, size))
+    return tuple(sorted(pins))
+
+
 def _ios(table: _Table, slug: str) -> Ios:
     reserved = IOS_STAGE_JOBS + RESERVED_JOB_NAMES
     tag_prefix = table.str("tag_prefix", pattern=TAG_PREFIX)
@@ -425,6 +457,9 @@ def _ios(table: _Table, slug: str) -> Ios:
     app_target = table.str("app_target", pattern=SCHEME)
     info_plist = table.path("info_plist")
     locale = table.str("locale", "en-US", pattern=LOCALE)
+    export_compliance = None
+    if table.has("export_compliance"):
+        export_compliance = table.enum("export_compliance", EXPORT_COMPLIANCE_ANSWERS)
     gate_jobs = _gate_jobs(table, reserved)
 
     build_table = table.table("build")
@@ -447,8 +482,11 @@ def _ios(table: _Table, slug: str) -> Ios:
     screenshots = _screenshot_sets(table.table("screenshots"))
     creative_table = table.table("creative")
     creative_dir = None
+    creative_sizes = None
     if creative_table is not None:
         creative_dir = creative_table.path("dir", "store/creative/ios")
+        if creative_table.has("sizes"):
+            creative_sizes = _creative_sizes(creative_table)
         creative_table.done()
     products_table = table.table("products")
     iap_route = None
@@ -462,7 +500,8 @@ def _ios(table: _Table, slug: str) -> Ios:
         release_table.done()
     table.done()
     return Ios(tag_prefix, bundle_id, asc_app_id, team_id, project, scheme, app_target, info_plist,
-               locale, gate_jobs, build, listing, whats_new, screenshots, creative_dir, iap_route, title)
+               locale, gate_jobs, build, listing, whats_new, screenshots, creative_dir, iap_route, title,
+               export_compliance, creative_sizes)
 
 
 def _android(table: _Table, slug: str) -> Android:
@@ -654,6 +693,73 @@ def check_files(config: Config, app_root: Path) -> list[str]:
             need(android.whats_new.markdown, "android.whats_new.markdown", "file")
         if android.screenshots_dir:
             need(android.screenshots_dir, "android.screenshots.dir", "dir")
+    return checked
+
+
+def check_pinned(config: Config, app_root: Path) -> list[str]:
+    """What the config pins about the app's own files still holds (config check --files and --pinned).
+
+    fud-ai's unit tests pinned these facts about its real files on every pull request and
+    iOS prepare run; here they are config values checked the same way:
+
+    - ios.export_compliance: the answer every app-target configuration declares
+      (ITSAppUsesNonExemptEncryption), so changing it is a reviewed config change.
+    - ios.creative.sizes: the header and search results images, by slot, file name and
+      byte size, plus the image checks the store step runs. App Store Connect matches
+      images by name and size, so a renamed or re-encoded file would be uploaded and sent
+      to App Review again.
+
+    Returns one line per pin checked (none when the config pins nothing).
+    """
+    from store_release.ios import asc  # noqa: PLC0415 - avoids an import cycle
+    from store_release.ios import release as ios_release  # noqa: PLC0415
+
+    checked: list[str] = []
+    ios = config.ios
+    if ios is None:
+        return checked
+    if ios.export_compliance is not None:
+        pbxproj = resolve_inside(app_root, ios.pbxproj, "ios.project")
+        try:
+            answer = ios_release.check_export_compliance(pbxproj, ios.app_target)
+        except ios_release.ReleaseError as exc:
+            raise ConfigError(f"ios.export_compliance: {exc}") from None
+        if answer != ios.export_compliance:
+            raise ConfigError(
+                f"ios.export_compliance: the {ios.app_target} target declares {ios_release.ENCRYPTION_KEY} = "
+                f"{answer}, but the config pins {ios.export_compliance}; change the pin only after reviewing "
+                "the app's encryption"
+            )
+        checked.append(f"ios.export_compliance = {answer} in every {ios.app_target} configuration")
+    if ios.creative_sizes is not None:
+        assert ios.creative_dir is not None
+        creative_dir = resolve_inside(app_root, ios.creative_dir, "ios.creative.dir")
+        found: dict[str, int] = {}
+        problems: list[str] = []
+        for folder, placement_type, _label, formats in asc.CREATIVE_SLOTS:
+            slot_dir = creative_dir / folder
+            images = sorted(p for p in (slot_dir.iterdir() if slot_dir.is_dir() else [])
+                            if p.is_file() and p.suffix.lower() in asc.CREATIVE_EXTENSIONS)
+            for image in images:
+                relative = f"{folder}/{image.name}"
+                found[relative] = image.stat().st_size
+                problem = asc.creative_problem(placement_type, image, formats)
+                if problem:
+                    problems.append(f"{relative} {problem}")
+        pinned = dict(ios.creative_sizes)
+        for relative, size in sorted(pinned.items()):
+            if relative not in found:
+                problems.append(f"{relative} is missing (pinned at {size} bytes)")
+            elif found[relative] != size:
+                problems.append(f"{relative} is {found[relative]} bytes, pinned at {size}")
+        problems += [f"{relative} is not pinned" for relative in sorted(set(found) - set(pinned))]
+        if problems:
+            raise ConfigError(
+                f"ios.creative.sizes: {ios.creative_dir} differs from the pinned images. App Store Connect "
+                "matches images by file name and size, so a changed image would be uploaded and sent to "
+                "App Review again; update the pin when that is intended:\n  " + "\n  ".join(problems)
+            )
+        checked.append(f"ios.creative.sizes: {len(pinned)} image(s) in {ios.creative_dir} as pinned")
     return checked
 
 

@@ -415,7 +415,8 @@ def run_plan(app: Any, *, version: str, work_dir: Path, environ: Mapping[str, st
     tag = ios.tag_prefix + version
     work_dir.mkdir(parents=True, exist_ok=True)
     report = Report()
-    sha = env.get("TOOL_SHA") or env.get("GITHUB_WORKFLOW_SHA", "")
+    # job.workflow_sha (TOOL_SHA), never GITHUB_WORKFLOW_SHA: in a called workflow that is the app's commit.
+    sha = env.get("TOOL_SHA", "")
     report.line(f"store-plan ios: {config.app.name} {version} (tag {tag}), store-release v{__version__}"
                 + (f" ({sha})" if sha else ""))
     result: dict[str, Any] = {"platform": "ios", "version": version, "tag": tag, "phases": [], "writes": [],

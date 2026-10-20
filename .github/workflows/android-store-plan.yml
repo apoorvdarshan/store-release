@@ -68,4 +68,5 @@ jobs:
           ANDROID_PRODUCTION_ROLLOUT: ${{ vars.ANDROID_PRODUCTION_ROLLOUT }}
           PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
           GH_TOKEN: ${{ github.token }}
+          TOOL_SHA: ${{ job.workflow_sha }}
         run: python3 -I -u .store-release/run.py --app-root app android plan --work-dir "$RUNNER_TEMP/store-plan"

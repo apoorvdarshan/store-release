@@ -44,6 +44,9 @@ project = "ios/calorietracker.xcodeproj"
 scheme = "calorietracker"
 app_target = "calorietracker"
 info_plist = "ios/calorietracker/Info.plist"
+# The project declares no non-exempt encryption (only HTTPS and Apple's system APIs).
+# Store checks and every prepare fail when it declares another answer.
+export_compliance = "NO"
 locale = "en-US"
 gate_jobs = [
   { id = "ios-tests", uses = "./.github/workflows/ios-tests.yml" },
@@ -93,6 +96,13 @@ required = false
 
 [ios.creative]
 dir = "store/creative/ios"
+
+# The images the live Asset Library holds (approved and placed on 7.1.2, 2026-10-20).
+# App Store Connect matches images by file name and byte size, so Store checks and every
+# prepare fail when these change, until this list is updated.
+[ios.creative.sizes]
+"header/fud-ai-header-orb-horizon.png" = 1763332
+"search-results/fud-ai-search-voice.png" = 2670930
 
 [ios.products]
 iap_route = "submission"

@@ -105,6 +105,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TOOL_REPOSITORY: ${{ job.workflow_repository }}
         run: python3 -I -u .store-release/run.py yanked check --warn-only
+      # STORE_SYNC_REVENUECAT is read strictly (an invalid value fails). Read it here, before
+      # anything is built, so a typo cannot fail a release after the Play listing changed.
+      # The gate itself still runs in the release job, where fud-ai ran it.
+      - name: Check the RevenueCat switch
+        if: github.event_name == 'push'
+        env:
+          STORE_SYNC_REVENUECAT: ${{ vars.STORE_SYNC_REVENUECAT }}
+        run: python3 -I -u .store-release/run.py --app-root app revenuecat-gate --check-switch
       - name: Resolve Android release switches
         id: gates
         env:

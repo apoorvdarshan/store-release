@@ -61,7 +61,7 @@ called without a track (the action would default to production).
 
 | Variable | When `true` |
 |---|---|
-| `STORE_SYNC_REVENUECAT` | **Fails the run**: RevenueCat write/sync is not implemented. An invalid value fails too |
+| `STORE_SYNC_REVENUECAT` | **Fails the run**: RevenueCat write/sync is not implemented (the gate runs in iOS prepare and, as in fud-ai, in the Android release job after the Play listing step). An invalid value fails every tag run before anything is built, even with the master switch off (iOS prepare, Android gates) |
 
 ## What each job sees
 

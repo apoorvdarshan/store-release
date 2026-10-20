@@ -56,13 +56,15 @@ ones visible at the script level), each with its own test
 
 ## Behaviour deltas from fud-ai
 
-Everything not listed here behaves exactly as fud-ai did.
+Everything not listed here behaves as fud-ai did. The table includes every check
+store-release adds that can stop a run; with Fud AI's current files and variables none
+of them fails.
 
 | # | Delta | Effect on Fud AI |
 |---|---|---|
 | D1 | Play: each padded frame's size is validated after padding | none (padding always yields a valid size, 1290×2796 → 1573×2796) |
 | D2 | Android master off on a tag: the caller skips the gate jobs and the release, a green no-op | none |
-| D3 | GitHub Release `--latest` only when the tag's version is the highest among non-draft releases with the same tag prefix, else `--latest=false` (iOS; Android production). Android non-production keeps `--prerelease --latest=false` | re-running an older tag's release step no longer takes Latest |
+| D3 | GitHub Release `--latest` only when the tag's version is the highest among non-draft releases with the same tag prefix, else `--latest=false` (iOS; Android production). Android non-production keeps `--prerelease --latest=false`. Deciding needs one more read (`gh release list --exclude-drafts`); if it fails, the release step fails | re-running an older tag's release step no longer takes Latest |
 | D4 | The SPM cache key includes the Xcode version and build and a digest of `developer_dir` | one cold SPM cache after migration, then a new cache when Xcode changes |
 | D5 | Validation dispatches gain the read-only `store-plan` job | an extra job on dispatches; nothing is written |
 | D6 | Explicit secret mapping, with presence checks at the start of each secret-using job | a missing secret fails earlier, by name |
@@ -73,12 +75,15 @@ Everything not listed here behaves exactly as fud-ai did.
 | D11 | App hooks run with a scrubbed environment; the ASC key and issuer IDs are set only on the steps that need them | none |
 | D12 | The Play re-run detector also matches the job name `release / release` | needed inside a called workflow |
 | D13 | Check-run names become `<caller job> / <inner job>`; the PR workflow is `Store checks` (`checks / checks` plus `store-release`) | none required |
-| D14 | `STORE_SYNC_REVENUECAT` is parsed strictly (an invalid value fails); fud-ai read it loosely as off | none while it is unset |
+| D14 | `STORE_SYNC_REVENUECAT` is parsed strictly (an invalid value fails); fud-ai read it loosely as off. Every tag run reads it before anything is built, even with the master switch off: iOS prepare (as before) and Android gates (`revenuecat-gate --check-switch`). The Android gate itself stays in the release job | none while it is unset or valid; an invalid value fails a tag run before anything is built or uploaded |
 | D15 | PR checks add config, callers, pins (which must be the commit of their version's release tag), yanked, duplicate release-note headings, Pillow staging, project export compliance, project version and gradle parsing on the real files | PR-only |
 | D16 | Messages that named a code constant name the config key | wording only |
 | D17 | Preflight, build number and build wait use the read-only client | none (the same GETs) |
 | D18 | The Sigstore and attestation signer is `apoorvdarshan/store-release/.github/workflows/android-publish.yml@<sha>`; the repository extension is still the app's | verification commands change ([verification.md](verification.md)) |
 | D19 | Temp names come from `app.slug` (`fudai.xcarchive`, was `FudAI.xcarchive`) | none |
+| D20 | A switch that is on fails the gates when its config table is missing (`IOS_SUBMIT_REVIEW` needs `[ios.products]`) | none (Fud AI's config has every table) |
+| D21 | Every job after prepare/gates re-checks its tooling commit and config (`job-setup`: `tool check`, `config check`) and its inputs (`stage check`; for example `build_id` must be a lowercase UUID) | fails only for an invalid config, a dropped or malformed job output, or jobs on different store-release commits (App Store Connect build ids are lowercase UUIDs) |
+| D22 | The facts fud-ai's unit tests pinned in its real files on every pull request and iOS prepare (export compliance `NO`; the header and search results images' names and byte sizes) are config pins, `ios.export_compliance` and `ios.creative.sizes`, checked by `config check --files` (Store checks) and `config check --pinned` (every iOS prepare). The ported tests read the synthetic tree instead | none: the same changes fail the same runs, with a config message instead of a test failure |
 
 ## Deliberately unchanged
 

@@ -9,6 +9,9 @@ catalog.checks, in order, with a scrubbed environment. App-specific rules
 
 `revenuecat-gate` counts the catalog and fails closed when STORE_SYNC_REVENUECAT
 is on: the RevenueCat write path is not implemented. An invalid value fails too.
+`revenuecat-gate --check-switch` only reads the switch (Android gates, before
+anything is built), so an invalid value never fails a release after the Play
+steps that come before the gate itself.
 """
 from __future__ import annotations
 
@@ -113,11 +116,25 @@ def check(env: dict[str, str] | None = None) -> None:
         hooks.run(ROOT, CHECKS, env=env)
 
 
-def revenuecat_gate() -> None:
+def sync_switch() -> bool:
+    """STORE_SYNC_REVENUECAT, read strictly: an invalid value fails."""
     try:
-        sync = switches.parse_switch("STORE_SYNC_REVENUECAT", os.environ.get("STORE_SYNC_REVENUECAT"))
+        return switches.parse_switch("STORE_SYNC_REVENUECAT", os.environ.get("STORE_SYNC_REVENUECAT"))
     except switches.SwitchError as exc:
         fail(str(exc))
+
+
+def check_switch() -> None:
+    """The switch alone, before anything is built; the gate itself runs later, where it always ran."""
+    if sync_switch():
+        print("::warning title=RevenueCat::STORE_SYNC_REVENUECAT is on, so the release job's RevenueCat gate "
+              "will fail closed (no write path); turn it off to release")
+        return
+    print("STORE_SYNC_REVENUECAT is off (a valid value); the RevenueCat gate stays dry-run")
+
+
+def revenuecat_gate() -> None:
+    sync = sync_switch()
     if PRODUCTS is None:
         print("catalog: no [catalog] in store-release.toml")
         sources = "the app repository"

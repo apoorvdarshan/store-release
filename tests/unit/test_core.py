@@ -7,6 +7,7 @@ import copy
 import io
 import json
 import os
+import plistlib
 import re
 import subprocess
 import sys
@@ -23,7 +24,7 @@ from store_release import (__version__, callers, catalog, cli, config, github, h
 from store_release.android import release as android_release
 from store_release.ios import release as ios_release
 from support import apps as support_apps
-from support import trees
+from support import pngs, trees
 from support.tag_fakes import TagApi
 
 support_apps.configure_fud_ai_defaults()
@@ -199,6 +200,19 @@ class ConfigValueTests(unittest.TestCase):
         ("ios.screenshots.sets[3].required", True, "WATCH set must have required = false"),
         ("ios.screenshots.sets[1].display_type", "APP_IPHONE_67", "listed twice"),
         ("ios.creative.dir", "", "ios.creative.dir"),
+        ("ios.export_compliance", "no", "ios.export_compliance"),
+        ("ios.export_compliance", False, "ios.export_compliance"),
+        ("ios.creative.sizes", {}, "ios.creative.sizes"),
+        ("ios.creative.sizes", [["header/a.png", 1]], "ios.creative.sizes"),
+        ("ios.creative.sizes", {"header/a.png": 0}, "positive integer"),
+        ("ios.creative.sizes", {"header/a.png": "17"}, "positive integer"),
+        ("ios.creative.sizes", {"header/a.png": True}, "positive integer"),
+        ("ios.creative.sizes", {"logo/a.png": 1}, "the slot header or search-results"),
+        ("ios.creative.sizes", {"header/sub/a.png": 1}, "the slot header or search-results"),
+        ("ios.creative.sizes", {"header/../a.png": 1}, "'..' segment"),
+        ("ios.creative.sizes", {"header/a.jpg": 1}, "the header slot takes .png files"),
+        ("ios.creative.sizes", {"search-results/a.gif": 1}, "takes .png, .jpg, .jpeg files"),
+        ("ios.creative.sizes", {"header/a.png": 1, "header/b.png": 2}, "the header slot takes one image"),
         ("ios.products.iap_route", "review-item", "ios.products.iap_route"),
         ("ios.github_release.title", "iOS {tag}", "unknown placeholder"),
         ("ios.github_release.title", "iOS {version!r}", "unknown placeholder"),
@@ -319,6 +333,98 @@ class ConfigFilesTests(unittest.TestCase):
         shutil.rmtree(self.app.root / "store/screenshots/ipad")
         with self.assertRaisesRegex(config.ConfigError, r"ios.screenshots.sets\[1\].dir"):
             config.check_files(self.app.config, self.app.root)
+
+
+class ConfigPinTests(unittest.TestCase):
+    """config check --pinned / --files: the facts fud-ai's unit tests pinned in its real files."""
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.app = support_apps.fixture_app("fud-ai", Path(tmp.name) / "app", screenshots=True)
+        self.creative = self.app.root / "store/creative/ios"
+
+    def pinned(self, cfg: config.Config | None = None) -> list[str]:
+        return config.check_pinned(cfg or self.app.config, self.app.root)
+
+    def fails(self, fragment: str, cfg: config.Config | None = None) -> None:
+        with self.assertRaises(config.ConfigError) as caught:
+            self.pinned(cfg)
+        self.assertIn(fragment, str(caught.exception))
+
+    def test_fud_ais_pins_hold_in_the_synthetic_tree(self) -> None:
+        self.assertEqual(self.app.config.ios.export_compliance, "NO")
+        self.assertEqual(self.app.config.ios.creative_sizes, (("header/fud-ai-header-orb-horizon.png", 1763332),
+                                                              ("search-results/fud-ai-search-voice.png", 2670930)))
+        self.assertEqual(self.pinned(), ["ios.export_compliance = NO in every calorietracker configuration",
+                                         "ios.creative.sizes: 2 image(s) in store/creative/ios as pinned"])
+
+    def test_the_slot_table_is_the_store_steps(self) -> None:
+        from store_release.ios import asc
+
+        self.assertEqual(list(config.CREATIVE_SLOT_SUFFIXES), [slot[0] for slot in asc.CREATIVE_SLOTS])
+        for folder, _, _, formats in asc.CREATIVE_SLOTS:
+            with self.subTest(slot=folder):
+                suffixes = config.CREATIVE_SLOT_SUFFIXES[folder]
+                self.assertEqual({asc.CREATIVE_EXTENSIONS[suffix] for suffix in suffixes}, set(formats))
+                self.assertEqual({s for s, kind in asc.CREATIVE_EXTENSIONS.items() if kind in formats}, set(suffixes))
+
+    def test_nothing_pinned_checks_nothing(self) -> None:
+        data = fud_ai_data()
+        del data["ios"]["export_compliance"], data["ios"]["creative"]["sizes"]
+        self.assertEqual(self.pinned(config.parse(data)), [])
+        example = config.load(EXAMPLE_TOML)
+        self.assertEqual(config.check_pinned(example, self.app.root), [])
+
+    def test_another_export_compliance_answer_fails(self) -> None:
+        (self.app.root / "ios/calorietracker/Info.plist").write_bytes(plistlib.dumps(
+            {"ITSAppUsesNonExemptEncryption": True, "ITSEncryptionExportComplianceCode": "code-1"}))
+        # A valid answer (YES with its code), but not the pinned one.
+        self.fails("the calorietracker target declares ITSAppUsesNonExemptEncryption = YES, but the config pins NO")
+        data = fud_ai_data()
+        data["ios"]["export_compliance"] = "YES"
+        self.assertEqual(self.pinned(config.parse(data))[0], "ios.export_compliance = YES in every calorietracker "
+                                                             "configuration")
+        (self.app.root / "ios/calorietracker/Info.plist").write_bytes(plistlib.dumps({}))
+        self.fails("ios.export_compliance: the calorietracker target's Debug configuration does not declare")
+
+    def test_a_changed_renamed_extra_or_invalid_image_fails(self) -> None:
+        header = self.creative / "header/fud-ai-header-orb-horizon.png"
+        search = self.creative / "search-results/fud-ai-search-voice.png"
+        original = header.read_bytes()
+        header.write_bytes(original[:-12] + pngs.chunk(b"prVt", b"x") + original[-12:])  # re-encoded: 13 bytes more
+        self.fails("header/fud-ai-header-orb-horizon.png is 1763345 bytes, pinned at 1763332")
+        header.write_bytes(original)
+        header.rename(header.with_name("renamed.png"))
+        self.fails("header/fud-ai-header-orb-horizon.png is missing (pinned at 1763332 bytes)")
+        self.fails("header/renamed.png is not pinned")
+        header.with_name("renamed.png").rename(header)
+        self.pinned()
+        (search.parent / "second.jpg").write_bytes(pngs.jpeg(1920, 1280))
+        self.fails("search-results/second.jpg is not pinned")
+        (search.parent / "second.jpg").unlink()
+        (search.parent / "notes.md").write_text("not an image")  # other files never count
+        self.pinned()
+        search.write_bytes(pngs.rgba(3840, 2560))
+        data = fud_ai_data()
+        data["ios"]["creative"]["sizes"]["search-results/fud-ai-search-voice.png"] = search.stat().st_size
+        self.fails("search-results/fud-ai-search-voice.png stores an alpha channel", config.parse(data))
+
+    def test_the_cli(self) -> None:
+        code, out, err = run_cli(["--app-root", str(self.app.root), "config", "check", "--pinned"])
+        self.assertEqual(code, 0, err)
+        self.assertIn("pinned: ios.creative.sizes: 2 image(s)", out)
+        code, out, err = run_cli(["--app-root", str(self.app.root), "config", "check", "--files"])
+        self.assertEqual(code, 0, err)
+        self.assertIn("pinned: ios.export_compliance = NO", out)
+        (self.creative / "header/fud-ai-header-orb-horizon.png").write_bytes(pngs.rgb(3840, 1646))
+        for flag in ("--pinned", "--files"):
+            code, _, err = run_cli(["--app-root", str(self.app.root), "config", "check", flag])
+            with self.subTest(flag=flag):
+                self.assertEqual(code, 1)
+                self.assertIn("error: ios.creative.sizes: store/creative/ios differs from the pinned images", err)
+        code, out, err = run_cli(["--app-root", str(self.app.root), "config", "check"])
+        self.assertEqual(code, 0, "a plain config check reads no app file")
 
 
 FUD_AI_PATHS = {
@@ -445,17 +551,40 @@ class SwitchTableTests(unittest.TestCase):
 
 
 class RevenueCatGateTests(unittest.TestCase):
-    def gate(self, value: str | None) -> tuple[int, str, str]:
+    def gate(self, value: str | None, fn=None) -> tuple[int, str, str]:
         env = {k: v for k, v in os.environ.items() if k != "STORE_SYNC_REVENUECAT"}
         if value is not None:
             env["STORE_SYNC_REVENUECAT"] = value
         out, err = io.StringIO(), io.StringIO()
         with mock.patch.dict(os.environ, env, clear=True), redirect_stdout(out), redirect_stderr(err):
             try:
-                catalog.revenuecat_gate()
+                (fn or catalog.revenuecat_gate)()
             except SystemExit as exc:
                 return exc.code, out.getvalue(), err.getvalue()
         return 0, out.getvalue(), err.getvalue()
+
+    def test_the_switch_alone_is_read_before_anything_is_built(self) -> None:
+        # Android gates: an invalid value fails there, not after the Play listing changed in the release job.
+        code, _, err = self.gate("bogus", catalog.check_switch)
+        self.assertEqual(code, 1)
+        self.assertIn("STORE_SYNC_REVENUECAT='bogus' is not a valid switch value", err)
+        for value in (None, "", "false", "0"):
+            code, out, _ = self.gate(value, catalog.check_switch)
+            with self.subTest(value=value):
+                self.assertEqual(code, 0)
+                self.assertIn("STORE_SYNC_REVENUECAT is off", out)
+                self.assertNotIn("catalog:", out, "the catalog is the gate's job, later")
+        # On is valid here; the gate in the release job still fails closed where it always did.
+        code, out, _ = self.gate("true", catalog.check_switch)
+        self.assertEqual(code, 0)
+        self.assertIn("::warning title=RevenueCat::STORE_SYNC_REVENUECAT is on", out)
+        app = support_apps.default_app()
+        code, out, err = run_cli(["--app-root", str(app.root), "revenuecat-gate", "--check-switch"],
+                                 env={"STORE_SYNC_REVENUECAT": "maybe"})
+        self.assertEqual(code, 1)
+        self.assertIn("is not a valid switch value", err)
+        code, out, err = run_cli(["--app-root", str(app.root), "revenuecat-gate", "--check-switch"])
+        self.assertEqual(code, 0, err)
 
     def test_counts_and_stays_dry_unless_on(self) -> None:
         for value in (None, "", "false", "off", "0"):
