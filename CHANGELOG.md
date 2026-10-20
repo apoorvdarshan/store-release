@@ -50,6 +50,10 @@ No switch, secret or variable changes.
 
 ### Verification
 
-Recorded when the release is cut: CI, the canary, the re-run probe
-([docs/rerun.md](docs/rerun.md)) and Fud AI's validation dispatches with their
-store-plan results.
+- Re-run probe: passed with `--failed`
+  ([39459054072](https://github.com/apoorvdarshan/store-release/actions/runs/39459054072))
+  and `--job`
+  ([39459383671](https://github.com/apoorvdarshan/store-release/actions/runs/39459383671));
+  see [docs/rerun.md](docs/rerun.md#results).
+- CI, the canary and Fud AI's validation dispatches with their store-plan results:
+  recorded when the release is cut.
