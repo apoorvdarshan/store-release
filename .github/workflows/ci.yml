@@ -1,0 +1,58 @@
+# store-release's own CI. Bootstrap placeholder: these jobs pass without running a
+# suite, so their check names exist from the first commit; the suites land with the
+# tooling.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test-stdlib:
+    name: test (stdlib)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: No suite yet
+        run: echo "bootstrap placeholder, the unit suite lands with the tooling"
+
+  test-strict:
+    name: test (strict)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: No suite yet
+        run: echo "bootstrap placeholder, the strict suites land with the tooling"
+
+  test-macos:
+    name: test (macos)
+    runs-on: macos-15
+    timeout-minutes: 5
+    steps:
+      - name: No suite yet
+        run: echo "bootstrap placeholder, the macOS profiles land with the tooling"
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Nothing to lint yet
+        run: echo "bootstrap placeholder, Python lint lands with the tooling"
+
+  workflows:
+    name: workflows
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: No workflow checks yet
+        run: echo "bootstrap placeholder, actionlint lands with the reusable workflows"

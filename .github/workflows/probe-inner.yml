@@ -1,0 +1,72 @@
+# Re-run probe, inner half (docs/rerun.md): one synthetic job, called by
+# probe-rerun.yml through the same SHA-pinned path the apps use. It prints what a
+# re-run hands a called workflow (job.workflow_sha, the attempt, its inputs, a
+# repository variable) and outputs id = <run_id>.<attempt that ran this job>[-<input>],
+# so a later job can tell which attempt produced the value it received. Touches
+# nothing: no checkout, no secrets, read-only token.
+name: Probe (inner)
+
+on:
+  workflow_call:
+    inputs:
+      id:
+        description: An id from an earlier call of this workflow, printed and folded into this call's id.
+        type: string
+        required: false
+        default: ""
+      fail_first_attempt:
+        description: Fail on attempt 1 of the run (so a re-run has something to re-run).
+        type: boolean
+        required: false
+        default: false
+    outputs:
+      id:
+        description: <run_id>.<run_attempt>, plus -<input id> when one was given.
+        value: ${{ jobs.probe.outputs.id }}
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      id: ${{ steps.context.outputs.id }}
+    steps:
+      - name: Print the run context
+        id: context
+        env:
+          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          INPUT_ID: ${{ inputs.id }}
+          FAIL_FIRST_ATTEMPT: ${{ inputs.fail_first_attempt }}
+          PROBE_VAR: ${{ vars.PROBE_VAR }}
+        run: |
+          set -euo pipefail
+          id="$RUN_ID.$RUN_ATTEMPT"
+          if [ -n "$INPUT_ID" ]; then
+            id="$id-$INPUT_ID"
+          fi
+          printf '%s=%s\n' \
+            job.workflow_repository "$WORKFLOW_REPOSITORY" \
+            job.workflow_sha "$WORKFLOW_SHA" \
+            github.run_id "$RUN_ID" \
+            github.run_attempt "$RUN_ATTEMPT" \
+            inputs.id "$INPUT_ID" \
+            inputs.fail_first_attempt "$FAIL_FIRST_ATTEMPT" \
+            vars.PROBE_VAR "$PROBE_VAR" \
+            id "$id"
+          echo "::notice title=probe::workflow_sha=$WORKFLOW_SHA attempt=$RUN_ATTEMPT input=${INPUT_ID:-none} PROBE_VAR=${PROBE_VAR:-unset} id=$id"
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+      - name: Fail on the first attempt
+        if: inputs.fail_first_attempt && github.run_attempt == '1'
+        run: |
+          echo "::error title=probe::failing on attempt 1 by design; re-run the failed jobs to continue"
+          exit 1
