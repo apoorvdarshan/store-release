@@ -157,7 +157,8 @@ name would satisfy it by accident); the caller check refuses them.
   of caller text. It refuses a `SHA` that the `vX.Y.Z` tag does not point at;
   `--allow-untagged` is for store-release's own CI, which renders its current commit.
 - `caller check --pr` (Store checks) compares each caller with the rendered one as
-  YAML (comments do not count) and reports the differing keys; every store-release
+  YAML (comments and the Run workflow inputs' descriptions do not count) and reports the
+  differing keys; every store-release
   reference must end in `@<sha> # v<version>`, and store-release's `v<version>` tag
   must point at `<sha>`.
 - `pins check` (Store checks): every store-release reference in every app workflow

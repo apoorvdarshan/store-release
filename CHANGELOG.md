@@ -43,10 +43,26 @@ Impact: release-path
   product prefixes, and any account or e-mail address, in the package, the reusable
   workflows and job-setup. `canary --expect` is required (store-release's CI passes it).
 
+### Fixed
+
+- The ported flows' iOS store plan reported CLEAN when the App Store version did not exist
+  yet and `IOS_CREATE_VERSION` would create it, without running any later check: a tag
+  whose What's New was still the live version's would create the version and then fail.
+  The plan now runs every check that needs no version, as a tag run makes them: the
+  catalog check and the local files (including Quit All's What's New version file), What's
+  New against the live version (Scowld, PCM Notes), pending in-app products (Scowld), the
+  catalog review items (ABYSM) and the review drafts. It lists, in a line and a notice,
+  what only the created version can show. For an existing version it also runs the catalog
+  and local-file checks before the preflight, and PCM Notes' store-step What's New check.
+- The iOS caller's `marketing_version` hint says `e.g. 1.2` instead of an app's version.
+  `caller check --pr` ignores the Run workflow inputs' descriptions, like comments, so
+  callers rendered by v0.2.0 keep passing.
+
 ### App actions required
 
-None. Existing configs and callers keep working unchanged; the rendered Android caller's
-header comment changes wording only (`caller check --pr` ignores comments).
+None. Existing configs and callers keep working unchanged: the rendered callers differ
+only in a comment (Android) and an input description (iOS), which `caller check --pr`
+ignores. Re-render them to pick up the new wording.
 
 ## [0.2.0] - 2026-10-21
 
