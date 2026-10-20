@@ -45,7 +45,10 @@ and plans.
 
 ## How every job starts
 
-1. Check the job's secrets are set (booleans only), when it has any.
+1. Check that the secrets every run of the job needs are set (as booleans; the
+   values are never read for this). Secrets that only some switches need (in
+   `prepare`, `gates` and the Play steps of `release`) are checked once the
+   switches show they are needed.
 2. Check out the app's config only (`filter: blob:none`, non-cone sparse) into `app/`.
 3. Check out `${{ job.workflow_repository }}` at `${{ job.workflow_sha }}`, whole,
    into `.store-release/`. The YAML that runs and the Python it runs always come from
