@@ -78,14 +78,14 @@ def remaining(data: bytes, ids: list[str]) -> bool:
 
 def TestOneInput(data: bytes) -> None:
     fdp = atheris.FuzzedDataProvider(data)
-    secrets = {"ASC_KEY_ID": make_id(fdp, 8, 12), "ASC_ISSUER_ID": make_id(fdp, 8, 40)}
-    ids = list(secrets.values())
+    fake_ids = {"ASC_KEY_ID": make_id(fdp, 8, 12), "ASC_ISSUER_ID": make_id(fdp, 8, 40)}
+    ids = list(fake_ids.values())
     files = [content(fdp, ids) for _ in range(fdp.ConsumeIntInRange(1, 3))]
 
     cleaned_files = []
     for raw in files:
         cleaned = raw
-        for name, value in secrets.items():
+        for name, value in fake_ids.items():
             cleaned = redact.replace_ignoring_case(cleaned, value.encode(), redact.PLACEHOLDERS[name])
         for value in ids:
             assert value.lower().encode() not in cleaned.lower(), f"{value!r} survives in {cleaned!r}"
@@ -105,7 +105,7 @@ def TestOneInput(data: bytes) -> None:
     link = folder / "link.txt"
     link.symlink_to(OUTSIDE)
 
-    redact.redact_folder(folder, secrets)
+    redact.redact_folder(folder, fake_ids)
     assert not link.exists() and not link.is_symlink(), "the symbolic link was kept"
     assert OUTSIDE.read_bytes() == files[0], "the link target outside the folder was changed"
     allowed = {cleaned for cleaned in cleaned_files if not remaining(cleaned, ids)}
