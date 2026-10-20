@@ -82,7 +82,7 @@ def ios_title(config: Config, app_root: Path, *, version: str, uploaded_build: s
         pbxproj = (app_root / config.ios.pbxproj).read_text(encoding="utf-8")
         line = next((line for line in pbxproj.splitlines() if "CURRENT_PROJECT_VERSION" in line), "")
         build = "".join(ch for ch in line if ch.isdigit())
-    # " (build N)" only when this run uploaded a build (ABYSM's and PCM Notes' titles).
+    # " (build N)" only when this run uploaded a build.
     suffix = f" (build {uploaded_build})" if uploaded_build else ""
     return render_template(config.ios.title, version=version, build=build, tag=tag, build_suffix=suffix)
 
@@ -95,7 +95,7 @@ def source_archive_name(config: Config, version: str) -> str:
 
 
 def source_archive_assets(config: Config, version: str, assets_dir: str) -> list[str]:
-    """The signed source archive and its bundle and checksum, in the order Scowld attached them."""
+    """The signed source archive, its Sigstore bundle and its checksum, in the order they are attached."""
     if not config.ios.source_archive:
         return []
     if not assets_dir:
@@ -179,7 +179,7 @@ def android_release_commands(config: Config, app_root: Path, *, tag: str, produc
         kind = ["--prerelease", "--latest=false"]
     notes = notes_args(notes_file)
     if exists and config.android.flow == "verceltics":
-        # Verceltics edited the release first, then replaced its assets.
+        # The verceltics flow edits the release first, then replaces its assets.
         return [
             ["gh", "release", "edit", tag, "--repo", repo, "--verify-tag", *kind, "--title", title, *notes],
             ["gh", "release", "upload", tag, "--repo", repo, "--clobber", *assets],

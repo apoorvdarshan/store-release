@@ -9,7 +9,7 @@ store with a client that refuses every write before it is sent:
   Android  the flow's read-only Play checks a tag run makes before building
            (check-version-code; with a track selected, play-state)
 
-Report-only, like the fud-ai flow's plan: it exits 0 when the plan was computed (CLEAN, or
+Report-only, like the standard flow's plan: it exits 0 when the plan was computed (CLEAN, or
 with the problems a tag run would hit, each also a warning annotation) and 1 only when it
 could not be computed. It lists the checks a tag run would fail, not every write the store
 step would make: the ported store steps have no write simulation.

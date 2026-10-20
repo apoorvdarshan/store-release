@@ -84,8 +84,10 @@ and `STORE_RELEASE_HAS_ANDROID`), so an iOS-only or Android-only app passes it.
 5. `stage check` in every job after prepare/gates: re-validate each input (below).
 
 The app checkout is blobless and sparse, so files outside a job's patterns (such as
-a large asset corpus) are never downloaded. Every app repository is public, so the
-lazy blob fetch needs no credentials.
+a large asset corpus) are never downloaded. The checkout keeps no credentials; the blobs
+a job's patterns need are fetched once, in job-setup, with the job's read-only token passed
+to that one git command as environment config (`fetch-app-files.sh`), so private app
+repositories work too.
 
 ## Values between jobs
 

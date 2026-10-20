@@ -312,7 +312,7 @@ jobs:
           [ "$status" -eq 0 ] || { tail -n 60 "$log"; echo "error: upload failed (full log in artifact)" >&2; exit "$status"; }
           echo "uploaded $MARKETING_VERSION ($BUILD_NUMBER); App Store Connect processing is checked next"
       # xcodebuild, altool and Xcode's distribution logs echo the key and issuer IDs.
-      # Artifacts are not masked like the console and app repositories are public, so
+      # Artifacts are not masked like the console and may be public, so
       # every file is rewritten (binary ones too), and any file that still holds an ID
       # in another encoding is removed before upload.
       - name: Collect logs

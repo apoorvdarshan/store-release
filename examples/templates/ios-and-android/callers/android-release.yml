@@ -1,0 +1,94 @@
+# Android Release: a thin caller of apoorvdarshan/store-release, pinned by commit SHA.
+# Rendered by `run.py callers render --platform android`; Store checks fails when it drifts.
+#
+#   push tag android-vX.Y   release run (the tag must equal versionName)
+#   Run workflow            validation run: build the signed AAB and APK and verify them;
+#                           never uploads, signs with Sigstore or releases. store-plan
+#                           prints, read-only, what a tag run would change.
+#
+# Verifying a GitHub Release download built by store-release (docs/verification.md):
+#   cosign verify-blob example-app-vX.Y.apk --bundle example-app-vX.Y.apk.sigstore.json \
+#     --certificate-identity-regexp '^https://github\.com/apoorvdarshan/store-release/\.github/workflows/android-publish\.yml@[0-9a-f]{40}$' \
+#     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+#     --certificate-github-workflow-repository owner/example-app
+#   gh attestation verify example-app-vX.Y.apk --repo owner/example-app \
+#     --signer-workflow apoorvdarshan/store-release/.github/workflows/android-publish.yml
+name: Android Release
+
+on:
+  push:
+    tags:
+      - "android-v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Tag release runs never overlap. Manual validation runs get their own group and
+# can never cancel a release run.
+concurrency:
+  group: android-release-${{ github.event_name == 'push' && 'release' || github.run_id }}
+  cancel-in-progress: false
+  # Keep every waiting tag run queued; the default (single) would cancel an older pending run.
+  queue: max
+
+jobs:
+  gates:
+    uses: apoorvdarshan/store-release/.github/workflows/android-gates.yml@0000000000000000000000000000000000000000 # v0.2.0
+    permissions:
+      contents: read
+      actions: read
+    secrets:
+      PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+
+  android-tests:
+    needs: gates
+    if: needs.gates.outputs.mode == 'release' && needs.gates.outputs.build == 'true'
+    uses: ./.github/workflows/android-tests.yml
+    permissions:
+      contents: read
+
+  release:
+    needs: [gates, android-tests]
+    # Validation runs skip android-tests; release runs need it to pass. A tag with
+    # ANDROID_RELEASE_AUTOMATION off resolves build=false, so this is skipped: a green no-op.
+    if: >-
+      !cancelled() && needs.gates.result == 'success' && needs.gates.outputs.build == 'true' &&
+      (needs.android-tests.result == 'success' ||
+       (needs.gates.outputs.mode == 'validate' && needs.android-tests.result == 'skipped'))
+    uses: apoorvdarshan/store-release/.github/workflows/android-publish.yml@0000000000000000000000000000000000000000 # v0.2.0
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      actions: read
+    with:
+      gates: "android-tests=${{ needs.android-tests.result }}"
+      mode: ${{ needs.gates.outputs.mode }}
+      build: ${{ needs.gates.outputs.build }}
+      github_release: ${{ needs.gates.outputs.github_release }}
+      listing: ${{ needs.gates.outputs.listing }}
+      whats_new: ${{ needs.gates.outputs.whats_new }}
+      screenshots: ${{ needs.gates.outputs.screenshots }}
+      production: ${{ needs.gates.outputs.production }}
+      play_upload: ${{ needs.gates.outputs.play_upload }}
+      play_tracks: ${{ needs.gates.outputs.play_tracks }}
+      tool_sha: ${{ needs.gates.outputs.tool_sha }}
+    secrets:
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+      PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+
+  # Validation runs only: a read-only, report-only plan of what a tag run would change.
+  store-plan:
+    needs: gates
+    if: github.event_name == 'workflow_dispatch' && needs.gates.result == 'success'
+    uses: apoorvdarshan/store-release/.github/workflows/android-store-plan.yml@0000000000000000000000000000000000000000 # v0.2.0
+    permissions:
+      contents: read
+    with:
+      tool_sha: ${{ needs.gates.outputs.tool_sha }}
+    secrets:
+      PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}

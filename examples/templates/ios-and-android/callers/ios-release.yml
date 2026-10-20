@@ -1,0 +1,168 @@
+# iOS Release: a thin caller of apoorvdarshan/store-release, pinned by commit SHA.
+# Rendered by `run.py callers render --platform ios`; Store checks fails when it drifts.
+#
+#   push tag ios-vX.Y   release run (the tag must equal MARKETING_VERSION)
+#   Run workflow        validation run: archive, sign, export and validate the IPA with
+#                       App Store Connect; never uploads. store-plan prints, read-only,
+#                       what a tag run would change in App Store Connect.
+#
+# Switches (repository variables), secrets, re-runs and verification:
+# https://github.com/apoorvdarshan/store-release/tree/v0.2.0/docs
+name: iOS Release
+
+on:
+  push:
+    tags:
+      - "ios-v*"
+  workflow_dispatch:
+    inputs:
+      marketing_version:
+        description: >-
+          Validation only: version to validate as (e.g. 7.2). Empty = the project
+          version. Apple rejects versions already approved, so use the next one.
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+# Build numbers come from App Store Connect, so tag release runs never overlap.
+# Manual validation runs get their own group and can never cancel a release run.
+concurrency:
+  group: ios-release-${{ github.event_name == 'push' && 'release' || github.run_id }}
+  cancel-in-progress: false
+  # Keep every waiting tag run queued; the default (single) would cancel an older pending run.
+  queue: max
+
+jobs:
+  ios-tests:
+    if: github.event_name == 'push'
+    uses: ./.github/workflows/ios-tests.yml
+    permissions:
+      contents: read
+
+  prepare:
+    uses: apoorvdarshan/store-release/.github/workflows/ios-prepare.yml@0000000000000000000000000000000000000000 # v0.2.0
+    permissions:
+      contents: read
+    with:
+      marketing_version: ${{ inputs.marketing_version }}
+    secrets:
+      APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+      APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+      APP_STORE_CONNECT_API_KEY_P8: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}
+
+  build:
+    needs: [ios-tests, prepare]
+    # Tag runs need the iOS tests to pass; validation runs skip it.
+    if: >-
+      !cancelled() && needs.prepare.result == 'success' &&
+      needs.prepare.outputs.build == 'true' &&
+      ((needs.ios-tests.result == 'success') ||
+       (github.event_name == 'workflow_dispatch' &&
+        needs.ios-tests.result == 'skipped'))
+    uses: apoorvdarshan/store-release/.github/workflows/ios-build.yml@0000000000000000000000000000000000000000 # v0.2.0
+    permissions:
+      contents: read
+    with:
+      gates: "ios-tests=${{ needs.ios-tests.result }}"
+      mode: ${{ needs.prepare.outputs.mode }}
+      marketing_version: ${{ needs.prepare.outputs.marketing_version }}
+      build_number: ${{ needs.prepare.outputs.build_number }}
+      tool_sha: ${{ needs.prepare.outputs.tool_sha }}
+    secrets:
+      APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+      APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+      APP_STORE_CONNECT_API_KEY_P8: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}
+      IOS_DEV_SIGNING_P12_BASE64: ${{ secrets.IOS_DEV_SIGNING_P12_BASE64 }}
+      IOS_DEV_SIGNING_P12_PASSWORD: ${{ secrets.IOS_DEV_SIGNING_P12_PASSWORD }}
+
+  # Its own job, so "Re-run failed jobs" after a later store-step failure keeps this
+  # result (and build_id) instead of waiting again against the original upload deadline.
+  wait-for-build:
+    needs: [ios-tests, prepare, build]
+    if: >-
+      !cancelled() && needs.prepare.result == 'success' &&
+      needs.prepare.outputs.mode == 'release' &&
+      needs.prepare.outputs.upload_build == 'true' &&
+      needs.ios-tests.result == 'success' &&
+      needs.build.result == 'success'
+    uses: apoorvdarshan/store-release/.github/workflows/ios-wait-for-build.yml@0000000000000000000000000000000000000000 # v0.2.0
+    permissions:
+      contents: read
+    with:
+      marketing_version: ${{ needs.prepare.outputs.marketing_version }}
+      build_number: ${{ needs.prepare.outputs.build_number }}
+      upload_started_at: ${{ needs.build.outputs.upload_started_at }}
+      wait_minutes: ${{ needs.prepare.outputs.wait_minutes }}
+      poll_seconds: ${{ needs.prepare.outputs.poll_seconds }}
+      tool_sha: ${{ needs.prepare.outputs.tool_sha }}
+    secrets:
+      APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+      APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+      APP_STORE_CONNECT_API_KEY_P8: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}
+
+  app-store-connect:
+    needs: [ios-tests, prepare, build, wait-for-build]
+    # With IOS_UPLOAD_BUILD on, only after this run's build is processed; with it off,
+    # listing/What's New/screenshots/creative assets run without a build.
+    if: >-
+      !cancelled() && needs.prepare.result == 'success' &&
+      needs.prepare.outputs.mode == 'release' &&
+      needs.prepare.outputs.asc == 'true' &&
+      needs.ios-tests.result == 'success' &&
+      ((needs.build.result == 'success' && needs.wait-for-build.result == 'success') ||
+       (needs.prepare.outputs.upload_build != 'true' &&
+        needs.build.result == 'skipped' && needs.wait-for-build.result == 'skipped'))
+    uses: apoorvdarshan/store-release/.github/workflows/ios-app-store-connect.yml@0000000000000000000000000000000000000000 # v0.2.0
+    permissions:
+      contents: read
+    with:
+      gates: "ios-tests=${{ needs.ios-tests.result }}"
+      marketing_version: ${{ needs.prepare.outputs.marketing_version }}
+      build_number: ${{ needs.prepare.outputs.build_number }}
+      build_id: ${{ needs.wait-for-build.outputs.build_id }}
+      upload_build: ${{ needs.prepare.outputs.upload_build }}
+      listing: ${{ needs.prepare.outputs.listing }}
+      whats_new: ${{ needs.prepare.outputs.whats_new }}
+      screenshots: ${{ needs.prepare.outputs.screenshots }}
+      creative: ${{ needs.prepare.outputs.creative }}
+      submit: ${{ needs.prepare.outputs.submit }}
+      public_release: ${{ needs.prepare.outputs.public_release }}
+      tool_sha: ${{ needs.prepare.outputs.tool_sha }}
+    secrets:
+      APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+      APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+      APP_STORE_CONNECT_API_KEY_P8: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}
+
+  github-release:
+    needs: [ios-tests, prepare, build, wait-for-build, app-store-connect]
+    if: >-
+      !cancelled() && github.event_name == 'push' &&
+      needs.ios-tests.result == 'success' && needs.prepare.result == 'success' &&
+      (needs.build.result == 'success' || needs.build.result == 'skipped') &&
+      (needs.wait-for-build.result == 'success' || needs.wait-for-build.result == 'skipped') &&
+      (needs.app-store-connect.result == 'success' || needs.app-store-connect.result == 'skipped')
+    uses: apoorvdarshan/store-release/.github/workflows/ios-github-release.yml@0000000000000000000000000000000000000000 # v0.2.0
+    permissions:
+      contents: write
+    with:
+      gates: "ios-tests=${{ needs.ios-tests.result }}"
+      marketing_version: ${{ needs.prepare.outputs.marketing_version }}
+      uploaded_build: ${{ needs.build.result == 'success' && needs.prepare.outputs.build_number || '' }}
+      tool_sha: ${{ needs.prepare.outputs.tool_sha }}
+
+  # Validation runs only: a read-only, report-only plan of what a tag run would change.
+  store-plan:
+    needs: prepare
+    if: github.event_name == 'workflow_dispatch' && needs.prepare.result == 'success'
+    uses: apoorvdarshan/store-release/.github/workflows/ios-store-plan.yml@0000000000000000000000000000000000000000 # v0.2.0
+    permissions:
+      contents: read
+    with:
+      marketing_version: ${{ needs.prepare.outputs.marketing_version }}
+      tool_sha: ${{ needs.prepare.outputs.tool_sha }}
+    secrets:
+      APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+      APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+      APP_STORE_CONNECT_API_KEY_P8: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}

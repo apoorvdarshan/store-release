@@ -43,6 +43,8 @@ GRADLE_TASK = re.compile(r":?[A-Za-z0-9_.:-]+")
 SPARSE_PATTERN = re.compile(r"!?/[^\n]*[^\s]")
 PATH_FILTER = re.compile(r"!?[A-Za-z0-9._/*?\[\] -]+")
 ASSET_NAME = re.compile(r"[A-Za-z0-9._-]+")
+# A GitHub Actions runner label (GitHub-hosted or self-hosted).
+RUNNER_LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 
 IOS_TITLE_PLACEHOLDERS = ("version", "build", "tag", "build_suffix")
 ASSET_NAME_PLACEHOLDERS = ("slug", "version", "version_code")
@@ -51,19 +53,24 @@ EXPORT_COMPLIANCE_ANSWERS = ("NO", "YES")
 CREATIVE_SLOT_SUFFIXES = {"header": (".png",), "search-results": (".png", ".jpg", ".jpeg")}
 
 
-# Ported release flows (store_release.flows): each app's own pipeline logic, selected per platform.
-IOS_FLOWS = ("fud-ai", "scowld", "verceltics", "abysm", "pcm-notes", "quit-all")
-ANDROID_FLOWS = ("fud-ai", "verceltics")
-# When an app's iOS gate jobs (its tests) run, as each app's own caller ran them:
-#   parallel        on every tag push, next to prepare (fud-ai, Scowld, Verceltics, ABYSM)
-#   after-prepare   on every tag push, after prepare (Quit All)
-#   when-uploading  after prepare, only on a tag push that uploads a build (PCM Notes)
+# The release flow every new app uses: store-release's own modules (store_release.ios,
+# store_release.android). Configs written before v0.3.0 may still call it "fud-ai".
+STANDARD_FLOW = "standard"
+FLOW_ALIASES = {"fud-ai": STANDARD_FLOW}
+# Ported release flows (store_release.flows): an existing app's own pipeline logic, kept
+# exactly as that app ran it (docs/flows.md), selected per platform.
+IOS_FLOWS = (STANDARD_FLOW, "scowld", "verceltics", "abysm", "pcm-notes", "quit-all")
+ANDROID_FLOWS = (STANDARD_FLOW, "verceltics")
+# When an app's iOS gate jobs (its tests) run:
+#   parallel        on every tag push, next to prepare (the default)
+#   after-prepare   on every tag push, after prepare
+#   when-uploading  after prepare, only on a tag push that uploads a build
 GATE_POLICIES = ("parallel", "after-prepare", "when-uploading")
 # What a re-run does with an existing GitHub Release of its tag:
-#   update          edit its title, notes and flags (the fud-ai flow's default)
-#   upload-missing  leave it as it is, but attach the release's assets again unless all are there (Scowld)
-#   keep            leave it as it is (ABYSM, PCM Notes)
-#   fail            create only; an existing release fails the job (Verceltics, Quit All)
+#   update          edit its title, notes and flags (the default)
+#   upload-missing  leave it as it is, but attach the release's assets again unless all are there
+#   keep            leave it as it is
+#   fail            create only; an existing release fails the job
 ON_EXISTING = ("update", "upload-missing", "keep", "fail")
 # Which iOS release is marked Latest: only the highest version (the default), or every one (the others).
 LATEST_POLICIES = ("highest", "always")
@@ -131,6 +138,8 @@ class IosBuild:
     # Export once to verify the App Store distribution signing before validating or
     # uploading (a release run then exports again to upload).
     verify_ipa: bool = False
+    # The macOS runner label the build job runs on; None keeps ios-build.yml's default.
+    runner: str | None = None
 
 
 @dataclass(frozen=True)
@@ -146,7 +155,7 @@ class WhatsNew:
     source: str
     markdown: str
     heading: str
-    # quit-all flow: the file (in the listing folder) naming the version the text is for.
+    # The quit-all flow: the file (in the listing folder) naming the version the text is for.
     version_file: str | None = None
 
 
@@ -173,7 +182,7 @@ class Ios:
     # answer the project must declare, and the creative images as ("<slot>/<file>", bytes) pairs.
     export_compliance: str | None = None
     creative_sizes: tuple[tuple[str, int], ...] | None = None
-    flow: str = "fud-ai"
+    flow: str = STANDARD_FLOW
     gate_policy: str = "parallel"
     # App scripts prepare runs before the switches are read (app tests that gate every run).
     prepare_checks: tuple[str, ...] = ()
@@ -223,7 +232,7 @@ class Android:
     screenshots_dir: str | None = None
     pad_to_9_16: bool = True
     asset_name: str = "{slug}-v{version}"
-    flow: str = "fud-ai"
+    flow: str = STANDARD_FLOW
 
 
 @dataclass(frozen=True)
@@ -236,13 +245,13 @@ class Config:
     ios: Ios | None
     android: Android | None
     # Store checks fail when any `## ` heading of the release notes appears twice (not only
-    # the tag being released). Verceltics and PCM Notes never checked that.
+    # the tag being released); false checks only the tag's own section.
     unique_headings: bool = True
 
     @property
     def ported_flow(self) -> bool:
-        """True when a platform runs a ported flow (ios.flow / android.flow other than fud-ai)."""
-        return any(p is not None and p.flow != "fud-ai" for p in (self.ios, self.android))
+        """True when a platform runs a ported flow (ios.flow / android.flow other than the standard flow)."""
+        return any(p is not None and p.flow != STANDARD_FLOW for p in (self.ios, self.android))
 
 
 # --- value checks -------------------------------------------------------------
@@ -411,6 +420,17 @@ class _Table:
         unknown = sorted(set(self.data) - self.used)
         if unknown:
             raise ConfigError(f"{self.key(unknown[0])}: unknown key")
+
+
+def _flow(table: _Table, allowed: tuple[str, ...]) -> str:
+    """ios.flow / android.flow: the standard flow (the default, also accepted by its old name) or a ported one."""
+    value = table.str("flow", STANDARD_FLOW)
+    value = FLOW_ALIASES.get(value, value)
+    if value not in allowed:
+        aliases = ", ".join(f"{old} (= {new})" for old, new in FLOW_ALIASES.items())
+        raise ConfigError(f"{table.key('flow')}: {value!r} is not supported by this store-release version "
+                          f"(accepted: {', '.join(allowed)}; also {aliases})")
+    return value
 
 
 def _gate_jobs(table: _Table, reserved: tuple[str, ...]) -> tuple[GateJob, ...]:
@@ -618,8 +638,8 @@ def _app_groups(table: _Table) -> tuple[tuple[str, tuple[str, ...]], ...]:
 
 def _ios(table: _Table, slug: str) -> Ios:
     reserved = IOS_STAGE_JOBS + RESERVED_JOB_NAMES
-    flow = table.enum("flow", IOS_FLOWS, "fud-ai")
-    ported = flow != "fud-ai"
+    flow = _flow(table, IOS_FLOWS)
+    ported = flow != STANDARD_FLOW
     tag_prefix = table.str("tag_prefix", pattern=TAG_PREFIX)
     bundle_id = table.str("bundle_id", pattern=BUNDLE_ID)
     asc_app_id = table.str("asc_app_id", pattern=ASC_APP_ID)
@@ -627,8 +647,9 @@ def _ios(table: _Table, slug: str) -> Ios:
     project = table.path("project", suffix=".xcodeproj")
     scheme = table.str("scheme", pattern=SCHEME)
     app_target = table.str("app_target", pattern=SCHEME)
-    # A ported flow reads its own project settings; an app whose Info.plist Xcode generates has none.
-    info_plist = table.path("info_plist", None) if ported else table.path("info_plist")
+    # An app whose Info.plist Xcode generates entirely (no INFOPLIST_FILE) has none; config check --files
+    # checks that against the project for the standard flow.
+    info_plist = table.path("info_plist", None)
     locale = table.str("locale", "en-US", pattern=LOCALE)
     export_compliance = None
     if table.has("export_compliance"):
@@ -654,6 +675,7 @@ def _ios(table: _Table, slug: str) -> Ios:
     extensions = _bundle_ids(build_table, "extensions")
     app_groups = _app_groups(build_table)
     verify_ipa = build_table.bool("verify_ipa", False)
+    runner = build_table.str("runner", None, pattern=RUNNER_LABEL)
     build_table.done()
     known = {bundle_id, *extensions}
     for bundle, _ in app_groups:
@@ -661,7 +683,8 @@ def _ios(table: _Table, slug: str) -> Ios:
             raise ConfigError(f"ios.build.app_groups: {bundle} is neither ios.bundle_id nor one of ios.build.extensions")
     if verify_ipa and not (extensions or app_groups):
         raise ConfigError("ios.build.verify_ipa: verifying the IPA needs ios.build.extensions or ios.build.app_groups")
-    build = IosBuild(developer_dir, checkout, cache_files, pre_archive, post_archive, extensions, app_groups, verify_ipa)
+    build = IosBuild(developer_dir, checkout, cache_files, pre_archive, post_archive, extensions, app_groups, verify_ipa,
+                     runner)
 
     prepare_checks: tuple[str, ...] = ()
     prepare_checkout: tuple[str, ...] = ()
@@ -730,8 +753,8 @@ def _ios(table: _Table, slug: str) -> Ios:
 
 def _android(table: _Table, slug: str) -> Android:
     reserved = ANDROID_STAGE_JOBS + RESERVED_JOB_NAMES
-    flow = table.enum("flow", ANDROID_FLOWS, "fud-ai")
-    ported = flow != "fud-ai"
+    flow = _flow(table, ANDROID_FLOWS)
+    ported = flow != STANDARD_FLOW
     tag_prefix = table.str("tag_prefix", pattern=TAG_PREFIX)
     package = table.str("package", pattern=PACKAGE)
     gradle_file = table.path("gradle_file", "android/app/build.gradle.kts")
@@ -754,7 +777,7 @@ def _android(table: _Table, slug: str) -> Android:
     if ported and signing != "gradle-properties":
         raise ConfigError(f"android.build.signing: the {flow} flow signs with gradle-properties")
     if not ported and signing != "keystore-properties":
-        raise ConfigError("android.build.signing: the fud-ai flow signs with keystore-properties")
+        raise ConfigError("android.build.signing: the standard flow signs with keystore-properties")
     keystore_properties = build_table.path("keystore_properties", f"{build_dir}/keystore.properties")
     keystore_property = password_file_property = key_alias = None
     if signing == "gradle-properties":
@@ -938,9 +961,10 @@ def check_files(config: Config, app_root: Path) -> list[str]:
                 resolve_inside(app_root, shot_set.dir, f"ios.screenshots.sets[{i}].dir")
         if ios.creative_dir:
             need(ios.creative_dir, "ios.creative.dir", "dir")
-        if ios.info_plist and ios.flow == "fud-ai":
+        if ios.flow == STANDARD_FLOW:
             check_info_plist(config, app_root)
-            checked.append(f"{ios.info_plist} (INFOPLIST_FILE)")
+            checked.append(f"{ios.info_plist} (INFOPLIST_FILE)" if ios.info_plist
+                           else f"{ios.app_target}: no INFOPLIST_FILE (Xcode generates the Info.plist)")
     if config.android is not None:
         android = config.android
         need(android.gradle_file, "android.gradle_file", "file")
@@ -961,8 +985,8 @@ def check_files(config: Config, app_root: Path) -> list[str]:
 def check_pinned(config: Config, app_root: Path) -> list[str]:
     """What the config pins about the app's own files still holds (config check --files and --pinned).
 
-    fud-ai's unit tests pinned these facts about its real files on every pull request and
-    iOS prepare run; here they are config values checked the same way:
+    These are facts about the app's real files that must not change by accident; they are
+    config values, so changing one is a reviewed edit of the config:
 
     - ios.export_compliance: the answer every app-target configuration declares
       (ITSAppUsesNonExemptEncryption), so changing it is a reviewed config change.
@@ -1026,7 +1050,8 @@ def check_pinned(config: Config, app_root: Path) -> list[str]:
 
 
 def check_info_plist(config: Config, app_root: Path) -> None:
-    """ios.info_plist must equal every app-target configuration's resolved INFOPLIST_FILE."""
+    """ios.info_plist must equal every app-target configuration's resolved INFOPLIST_FILE; without
+    ios.info_plist, no configuration may set INFOPLIST_FILE (Xcode generates the whole Info.plist)."""
     from store_release.ios import release as ios_release  # noqa: PLC0415 - avoids an import cycle
 
     ios = config.ios
@@ -1041,6 +1066,18 @@ def check_info_plist(config: Config, app_root: Path) -> None:
         info_file = settings.get("INFOPLIST_FILE", "")
         relative = re.sub(r"^\$[({]SRCROOT[)}]/", "", info_file)
         resolved = (project_parent / relative).as_posix() if relative else ""
+        if ios.info_plist is None and resolved:
+            raise ConfigError(
+                f"ios.info_plist: the {ios.app_target} target's {name} INFOPLIST_FILE is {info_file} "
+                f"({resolved}); set ios.info_plist = \"{resolved}\""
+            )
+        if ios.info_plist is None:
+            if settings.get("GENERATE_INFOPLIST_FILE", "").upper() != "YES":
+                raise ConfigError(
+                    f"ios.info_plist: the {ios.app_target} target's {name} configuration has neither an "
+                    "INFOPLIST_FILE nor GENERATE_INFOPLIST_FILE = YES"
+                )
+            continue
         if resolved != ios.info_plist:
             raise ConfigError(
                 f"ios.info_plist: {ios.info_plist} is not the {ios.app_target} target's {name} "

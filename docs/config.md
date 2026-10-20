@@ -69,7 +69,7 @@ python3 -I -u path/to/store-release/run.py --app-root . config check --files
 | `catalog.checks` | list[path] | `[]` | app hook scripts (`.py`/`.sh`) run after the generic checks wherever `catalog check` runs |
 | `catalog.storekit` / `.products_source` | path / path | none | a ported flow's catalog check compares the catalog with the app's StoreKit configuration and the source file that declares its product ids (`BillingModels.kt`, `StoreManager.swift`, `TipStore.swift`, `PaywallManager.swift`); for a ported flow `catalog.groups` must be the groups that flow reads |
 | `checks.paths` | list[str] | `[]` | path filter of the app's `store-checks.yml` for `push` and `pull_request`; `[]` = no filter |
-| `ios.flow` | enum | `fud-ai` | which release flow runs ([flows.md](flows.md)): `fud-ai` (store-release's own modules), or the ported `scowld`, `verceltics`, `abysm`, `pcm-notes`, `quit-all`. A ported flow accepts only the listing, What's New and screenshot keys it reads, and no `ios.products` or `ios.export_compliance` (it decides those itself) |
+| `ios.flow` | enum | `standard` | which release flow runs ([flows.md](flows.md)): `standard` (store-release's own modules; every new app uses it; `fud-ai` is its old name and still accepted), or the ported `scowld`, `verceltics`, `abysm`, `pcm-notes`, `quit-all`. A ported flow accepts only the listing, What's New and screenshot keys it reads, and no `ios.products` or `ios.export_compliance` (it decides those itself) |
 | `ios.tag_prefix` | str | required | `^([a-z]+-)*v$`; tags are `<tag_prefix><MARKETING_VERSION>` |
 | `ios.bundle_id` | str | required | reverse-DNS; must resolve to exactly one App Store Connect app, and the archive's main bundle must carry it |
 | `ios.asc_app_id` | str | required | `^[0-9]{6,12}$`; version creation refuses any other app |
@@ -77,7 +77,7 @@ python3 -I -u path/to/store-release/run.py --app-root . config check --files
 | `ios.project` | path | required | the `*.xcodeproj`; its `project.pbxproj` holds `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION`, identical in every configuration |
 | `ios.scheme` | str | required | the scheme to archive |
 | `ios.app_target` | str | required | the target whose configurations decide export compliance |
-| `ios.info_plist` | path | required (`fud-ai`) | the app target's Info.plist; `config check --files` checks it is the target's resolved `INFOPLIST_FILE`. Optional for a ported flow (an app whose Info.plist Xcode generates has none) |
+| `ios.info_plist` | path | none | the app target's Info.plist; `config check --files` checks it is the target's resolved `INFOPLIST_FILE`. Leave it out when Xcode generates the whole Info.plist (`GENERATE_INFOPLIST_FILE = YES` and no `INFOPLIST_FILE`); the standard flow's `config check --files` then checks that no configuration sets an `INFOPLIST_FILE` |
 | `ios.export_compliance` | enum | none | *pin*; `NO` or `YES`: the `ITSAppUsesNonExemptEncryption` answer every app-target configuration must declare (YES also needs `ITSEncryptionExportComplianceCode`). Unset accepts either valid answer |
 | `ios.locale` | str | `en-US` | the listing, What's New and creative locale |
 | `ios.gate_jobs` | array of tables | required | non-empty; each `{ id = "<job id>", uses = "./.github/workflows/<file>.yml" }`, optionally `with = { <input> = <string, bool or int> }` (rendered as the job's `with:`), ids unique, `^[a-z0-9][a-z0-9_-]*$`, not a store-release job name, `web`, `android`, `store-release` or `checks`. The app's own test workflows that must pass on a tag before anything after prepare runs, with `contents: read` |
@@ -86,6 +86,7 @@ python3 -I -u path/to/store-release/run.py --app-root . config check --files
 | `ios.prepare.checkout` | list[pattern] | none | what those scripts read, added to prepare's sparse checkout |
 | `ios.build.developer_dir` | abs path | required | the Xcode to use; must not contain `beta` (any case) |
 | `ios.build.checkout` | list[pattern] | required | the build job's sparse checkout (the config and the hook scripts are added automatically) |
+| `ios.build.runner` | str | `xcode-27` (the build workflow's default) | the GitHub Actions runner label the build job runs on, for example `macos-26` or a self-hosted label; passed to `ios-build.yml` only when set. Its Xcode must be at `developer_dir` |
 | `ios.build.package_cache_files` | list[glob] | `["**/Package.resolved"]` | files hashed into the SPM-sources cache key |
 | `ios.build.pre_archive` | list[path] | `[]` | app scripts run before signing material is installed, with a scrubbed environment plus `MARKETING_VERSION`, `BUILD_NUMBER`, `DEVELOPER_DIR` |
 | `ios.build.post_archive` | list[path] | `[]` | app scripts run after the archive check and before export, with a scrubbed environment plus `ARCHIVE_PATH`, `APP_PATH`, `MARKETING_VERSION`, `BUILD_NUMBER`, `DEVELOPER_DIR` (PCM Notes' offline-notes check) |
@@ -108,7 +109,7 @@ python3 -I -u path/to/store-release/run.py --app-root . config check --files
 | `ios.github_release.on_existing` | enum | `update` | a tag's existing GitHub Release: `update` its title, notes and flags; `upload-missing` keep it and attach the release's files again unless all are there (Scowld); `keep` it as it is (ABYSM, PCM Notes); `fail` (create only: Verceltics, Quit All) |
 | `ios.github_release.latest` | enum | `highest` | `highest`: Latest only when the tag is the highest iOS version; `always`: every release is created with `--latest` |
 | `ios.github_release.source_archive` | bool | `false` | a `source-archive` job (`ios-source-archive.yml`, the only one with `id-token: write`) archives the tagged commit as `<slug>-<version>-source.tar.gz` with its `.sha256` and a Sigstore bundle, attests its provenance, and the release attaches the three files ([verification.md](verification.md)) |
-| `android.flow` | enum | `fud-ai` | `fud-ai`, or the ported `verceltics` ([flows.md](flows.md)) |
+| `android.flow` | enum | `standard` | `standard` (`fud-ai` is its old name), or the ported `verceltics` ([flows.md](flows.md)) |
 | `android.tag_prefix` | str | required | `^([a-z]+-)*v$`; the tag must equal `<prefix><versionName>` |
 | `android.package` | str | required | the applicationId and Play `packageName` |
 | `android.gradle_file` | path | `android/app/build.gradle.kts` | exactly one `versionName = "X"` and one `versionCode = N` line |
@@ -120,7 +121,7 @@ python3 -I -u path/to/store-release/run.py --app-root . config check --files
 | `android.build.aab` | path | `<dir>/app/build/outputs/bundle/release/app-release.aab` | |
 | `android.build.apk` | path | `<dir>/app/build/outputs/apk/release/app-release.apk` | |
 | `android.build.checkout` | list[pattern] | required | the release job's sparse checkout |
-| `android.build.signing` | enum | required | `keystore-properties` (the `fud-ai` flow): the four keystore secrets become `storeFile`, `storePassword`, `keyAlias`, `keyPassword` (Java-properties escaped) in `RUNNER_TEMP/<slug>-keystore.properties`, mode 600, linked at `keystore_properties`. `gradle-properties` (the `verceltics` flow): the keystore and a file holding its password, under `RUNNER_TEMP`, reach Gradle as `-P<keystore_property>=...` and `-P<password_file_property>=...`; only `ANDROID_KEYSTORE_BASE64` and `ANDROID_KEYSTORE_PASSWORD` are used |
+| `android.build.signing` | enum | required | `keystore-properties` (the standard flow): the four keystore secrets become `storeFile`, `storePassword`, `keyAlias`, `keyPassword` (Java-properties escaped) in `RUNNER_TEMP/<slug>-keystore.properties`, mode 600, linked at `keystore_properties`. `gradle-properties` (the `verceltics` flow): the keystore and a file holding its password, under `RUNNER_TEMP`, reach Gradle as `-P<keystore_property>=...` and `-P<password_file_property>=...`; only `ANDROID_KEYSTORE_BASE64` and `ANDROID_KEYSTORE_PASSWORD` are used |
 | `android.build.keystore_property` / `.password_file_property` / `.key_alias` | str / str / str | required for `gradle-properties` | the two Gradle property names, and the key alias `android verify` checks |
 | `android.build.sdk_packages` | list[str] | `[]` | Android SDK packages `setup-android` installs before the build (none: the runner's own SDK) |
 | `android.build.keystore_properties` | path | `<dir>/keystore.properties` | where Gradle reads the signing config; the app must gitignore it |
@@ -128,12 +129,12 @@ python3 -I -u path/to/store-release/run.py --app-root . config check --files
 | `android.listing.dir` | path | `store/metadata/play` | `files` source: one `<locale>/` folder of text files |
 | `android.whats_new.source` / `.markdown` / `.heading` | enum / path / str | `markdown` / `PLAYSTORE.md` / `What's New` | `<locale>...</locale>` blocks of at most 500 characters, plain text. The verceltics flow: `release-notes` (the tag's section, as plain text) |
 | `android.screenshots.dir` | path | required in the table | numbered `NN-name.png` phone frames |
-| `android.screenshots.pad_to_9_16` | bool | `true` | `true` (the `fud-ai` flow): off-aspect frames are padded onto black at 9:16, then validated; `false` (the `verceltics` flow): the frames are uploaded as they are |
+| `android.screenshots.pad_to_9_16` | bool | `true` | `true` (the standard flow): off-aspect frames are padded onto black at 9:16, then validated; `false` (the `verceltics` flow): the frames are uploaded as they are |
 | `android.github_release.asset_name` | template | `{slug}-v{version}` | `{slug}`, `{version}`, `{version_code}`; must render to `^[A-Za-z0-9._-]+$`; names the `.aab`, `.apk` and their `.sigstore.json`. The title is fixed: `Android {version} (versionCode {version_code})` |
 
 ## Fixed in code, not config
 
-These stay in code for the fud-ai flow (a ported flow keeps its app's own tables):
+These stay in code for the standard flow (a ported flow keeps its app's own tables):
 
 | Display type | Staged folder | Accepted sizes (the first is the fit target) |
 |---|---|---|

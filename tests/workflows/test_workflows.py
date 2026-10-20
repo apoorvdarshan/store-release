@@ -1,7 +1,10 @@
 """The ten reusable workflows and the job-setup action: interfaces, permissions, pins and shell hygiene (PyYAML)."""
 from __future__ import annotations
 
+import os
 import re
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -230,12 +233,12 @@ class ReusableWorkflowTests(unittest.TestCase):
         job_id, job = only_job(load("android-publish.yml"))
         self.assertEqual(job_id, "release")
         uploads = [step["name"] for step in job["steps"] if step.get("name", "").startswith("Upload to Play")]
-        # Two per flow: the fud-ai flow's (plaintext key) and the verceltics flow's (key file).
+        # Two per flow: the standard flow's (plaintext key) and the verceltics flow's (key file).
         self.assertEqual(len(uploads), 4)
         for step in job["steps"]:
             if step.get("name", "").startswith("Upload to Play"):
                 flow = "!=" if "ported flow" in step["name"] else "=="
-                self.assertIn(f"env.STORE_RELEASE_ANDROID_FLOW {flow} 'fud-ai'", step["if"])
+                self.assertIn(f"env.STORE_RELEASE_ANDROID_FLOW {flow} 'standard'", step["if"])
         for step in job["steps"]:
             if step.get("uses", "").startswith("r0adkll/upload-google-play"):
                 self.assertIn("inputs.play_tracks != ''", step["if"])
@@ -258,7 +261,7 @@ class ReusableWorkflowTests(unittest.TestCase):
         # STORE_SYNC_REVENUECAT on every Android tag run, before anything is built; the gate stays in the release job.
         gates = steps("android-gates.yml")
         switch = gates[index(gates, "Check the RevenueCat switch")]
-        self.assertEqual(switch["if"], "github.event_name == 'push' && env.STORE_RELEASE_ANDROID_FLOW == 'fud-ai'")
+        self.assertEqual(switch["if"], "github.event_name == 'push' && env.STORE_RELEASE_ANDROID_FLOW == 'standard'")
         self.assertEqual(switch["env"], {"STORE_SYNC_REVENUECAT": "${{ vars.STORE_SYNC_REVENUECAT }}"})
         self.assertIn("revenuecat-gate --check-switch", switch["run"])
         publish = steps("android-publish.yml")
@@ -281,12 +284,60 @@ class ReusableWorkflowTests(unittest.TestCase):
         action = yaml.safe_load((TOOL_ROOT / ".github/actions/job-setup/action.yml").read_text())
         self.assertEqual(sorted(action["inputs"]), ["config", "expected-tool-sha", "job", "tool-sha"])
         self.assertEqual(action["runs"]["using"], "composite")
-        script = action["runs"]["steps"][1]["run"]
-        self.assertNotIn("${{", script)
-        for needle in ("tool check --tool-sha", "config check", "paths --job", "sparse-checkout set --no-cone --stdin",
-                       "config export --job"):
-            self.assertIn(needle, script)
+        steps = action["runs"]["steps"][1:]
+        scripts = [step["run"] for step in steps]
+        for script in scripts:
+            self.assertNotIn("${{", script)
+        order = ["tool check --tool-sha", "config check", "paths --job", "fetch-app-files.sh", "config export --job"]
+        joined = "\n".join(scripts)
+        self.assertEqual(sorted(order, key=joined.index), order)
+        # The job token reaches the lazy blob fetch (private app repositories) and nothing else: only the
+        # fetch step has it, and its script runs git alone, with the token as environment config.
+        with_token = [step for step in steps if "github.token" in str(step.get("env", {}))]
+        self.assertEqual(len(with_token), 1)
+        fetch = with_token[0]
+        self.assertEqual(fetch["env"], {"FETCH_TOKEN": "${{ github.token }}"})
+        self.assertEqual(fetch["run"], 'bash "$GITHUB_ACTION_PATH/fetch-app-files.sh" app '
+                                       '"$RUNNER_TEMP/store-release-paths.txt"')
+        script = (TOOL_ROOT / ".github/actions/job-setup/fetch-app-files.sh").read_text()
+        self.assertIn('GIT_CONFIG_KEY_0="http.${GITHUB_SERVER_URL:-https://github.com}/.extraheader"', script)
+        self.assertIn('echo "::add-mask::$auth"', script)
+        self.assertIn("unset FETCH_TOKEN", script)
+        commands = [line.strip() for line in script.splitlines() if line.strip() and not line.lstrip().startswith("#")]
+        self.assertFalse([line for line in commands if "python" in line or "git config" in line or "curl" in line])
+        self.assertEqual([line for line in commands if line.startswith("git ")],
+                         ['git -C "$app" sparse-checkout set --no-cone --stdin < "$patterns"'])
 
+    def test_the_fetch_script_checks_out_the_patterns(self) -> None:
+        """fetch-app-files.sh against a local blobless clone (the token part needs GitHub: CI runs it there)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            origin = tmp_path / "origin"
+            origin.mkdir()
+            env = {**os.environ, "GIT_CONFIG_NOSYSTEM": "1", "HOME": tmp, "GIT_AUTHOR_NAME": "t",
+                   "GIT_AUTHOR_EMAIL": "t@example.com", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com"}
+            env.pop("FETCH_TOKEN", None)
+
+            def git(*args, cwd=origin):
+                subprocess.run(["git", *args], cwd=cwd, env=env, check=True, capture_output=True)
+
+            git("init", "-q", "-b", "main")
+            git("config", "uploadpack.allowFilter", "true")
+            for name in ("store/store-release.toml", "ios/App/main.swift", "big/corpus.bin"):
+                (origin / name).parent.mkdir(parents=True, exist_ok=True)
+                (origin / name).write_text(name)
+            git("add", ".")
+            git("commit", "-q", "-m", "x")
+            git("clone", "-q", "--filter=blob:none", "--no-checkout", f"file://{origin}", "app", cwd=tmp_path)
+            git("sparse-checkout", "set", "--no-cone", "/store/store-release.toml", cwd=tmp_path / "app")
+            git("checkout", "-q", "main", cwd=tmp_path / "app")
+            (tmp_path / "paths.txt").write_text("/store/store-release.toml\n/ios/\n")
+            subprocess.run(["bash", str(TOOL_ROOT / ".github/actions/job-setup/fetch-app-files.sh"),
+                            str(tmp_path / "app"), str(tmp_path / "paths.txt")], env=env, check=True,
+                           capture_output=True)
+            self.assertTrue((tmp_path / "app/ios/App/main.swift").is_file())
+            self.assertFalse((tmp_path / "app/big").exists())
+            self.assertNotIn("extraheader", (tmp_path / "app/.git/config").read_text())
 
 if __name__ == "__main__":
     unittest.main()

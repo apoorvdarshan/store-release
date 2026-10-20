@@ -29,7 +29,7 @@ import tempfile
 from pathlib import Path
 from typing import Iterator, Mapping
 
-from store_release.config import Config, ConfigError
+from store_release.config import STANDARD_FLOW, Config, ConfigError
 from store_release.flows import flow_package
 
 
@@ -432,7 +432,7 @@ def catalog_check(config: Config, args: list[str]) -> int:
     ns = parser.parse_args(args)
     platform = ns.platform
     flow = (config.ios.flow if config.ios is not None and platform != "android" else None) or (
-        config.android.flow if config.android is not None else "fud-ai")
+        config.android.flow if config.android is not None else STANDARD_FLOW)
     if ns.event == "workflow_dispatch" and flow in CATALOG_ON_TAG_RUNS_ONLY:
         print(f"catalog check: the {flow} flow checks the catalog on tag runs and pull requests")
         return 0

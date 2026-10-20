@@ -110,7 +110,8 @@ def run(app_root: Path, expectations: dict[str, Any], work: Path) -> int:
 def main(app: Any, argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="canary", description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--expect", type=Path, default=TOOL_ROOT / "tests" / "canary" / "fud-ai.toml")
+    parser.add_argument("--expect", type=Path, required=True,
+                        help="the app's expectations, for example tests/canary/<app>.toml")
     args = parser.parse_args(argv)
     expectations = tomllib.loads(args.expect.read_text(encoding="utf-8"))
     with tempfile.TemporaryDirectory(prefix="store-release-canary-") as work:

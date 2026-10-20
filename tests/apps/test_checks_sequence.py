@@ -3,6 +3,7 @@ iOS-only app. Each step's `if:` is evaluated from what `config export --job chec
 single-platform app skips exactly the other platform's steps and everything else passes."""
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 import subprocess
@@ -13,8 +14,10 @@ from pathlib import Path
 
 import yaml
 
+from store_release import __version__, callers, config, scaffold
 from support import apps as support_apps
 from support import clirun, trees
+from support.tag_fakes import TagApi
 
 support_apps.configure_fud_ai_defaults()
 
@@ -109,6 +112,36 @@ class ChecksSequenceTests(unittest.TestCase):
                      "Check the project version and export compliance",
                      "Stage every screenshot set for upload (Pillow, no store APIs)"):
             self.assertIn(name, ran)
+
+
+class ScaffoldedAppTests(unittest.TestCase):
+    """An app that `run.py init` set up passes the store checks and the pull request caller check as written."""
+
+    SHA = "e7" * 20
+    IOS = ["--name", "My App", "--bundle-id", "com.example.myapp", "--asc-app-id", "1234567890", "--team-id",
+           "ABCDE12345", "--project", "ios/MyApp.xcodeproj"]
+    ANDROID = ["--package", "com.example.myapp", "--upload-cert-sha256", "ab" * 32, "--app-repository", "someone/my-app"]
+
+    def test_every_platform(self) -> None:
+        cases = {"ios": (["--platform", "ios", *self.IOS], False),
+                 "android": (["--platform", "android", "--name", "My App", *self.ANDROID], False),
+                 "all": (["--platform", "all", *self.IOS, *self.ANDROID], False),
+                 "all, generated Info.plist": (["--platform", "all", *self.IOS, *self.ANDROID], True)}
+        for label, (args, generated) in cases.items():
+            with self.subTest(case=label), tempfile.TemporaryDirectory() as tmp:
+                root = trees.write_new_app_tree(Path(tmp) / "my-app", generated_plist=generated)
+                with open(os.devnull, "w") as quiet, contextlib.redirect_stdout(quiet):
+                    scaffold.main(root, ["--no-input", *args, "--sha", self.SHA, "--allow-untagged"], environ={})
+                ran, skipped = ChecksSequenceTests.run_sequence(self, root)
+                self.assertIn("Check every file the config names", ran)
+                self.assertEqual("Check the project version and export compliance" in ran, "android" != label)
+                self.assertEqual("Check the gradle version" in ran, label != "ios")
+                cfg = config.load_for_app(root)
+                env = {"TOOL_SHA": self.SHA, "TOOL_REPOSITORY": callers.DEFAULT_REPOSITORY,
+                       "GITHUB_REPOSITORY": "someone/my-app"}
+                with open(os.devnull, "w") as quiet, contextlib.redirect_stdout(quiet):
+                    callers.pr_check(cfg, root, environ=env, opener=TagApi({f"v{__version__}": self.SHA}))
+                    callers.pins_check(root, environ=env, opener=TagApi({f"v{__version__}": self.SHA}))
 
 
 class PortedFlowStepsTests(unittest.TestCase):

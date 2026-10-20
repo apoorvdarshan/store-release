@@ -13,7 +13,7 @@ Stdlib only: the macOS build job never installs the store lock.
                    extensions, each with its bundle id, version, build, team and app groups in its
                    signature; --kind distribution (an exported IPA's Payload) also checks the strict
                    signature, an Apple Distribution certificate, an App Store profile and no
-                   get-task-allow (Quit All's verify_ios_bundles.sh, for any app).
+                   get-task-allow.
 """
 from __future__ import annotations
 
@@ -27,6 +27,7 @@ import sys
 from pathlib import Path
 from typing import Callable, Iterable
 
+from store_release.config import STANDARD_FLOW
 from store_release.ios import release as ios_release
 
 XCODE_VERSION = re.compile(r"^Xcode ([0-9][0-9.]*)\s*$", re.MULTILINE)
@@ -194,8 +195,8 @@ def bundle_entitlements(bundle: Path, run: Runner) -> dict:
 def verify_bundles(apps_dir: Path, *, kind: str, bundle_id: str, extensions: Iterable[str],
                    app_groups: dict[str, tuple[str, ...]], team_id: str, version: str, build: str,
                    run: Runner = subprocess.run) -> list[str]:
-    """Quit All's verify_ios_bundles.sh for any app: the archive (kind "archive") or the App
-    Store-signed IPA's Payload (kind "distribution"). Returns one line per bundle checked."""
+    """The app and its extensions in the archive (kind "archive") or the App Store-signed IPA's
+    Payload (kind "distribution"). Returns one line per bundle checked."""
     if kind not in ("archive", "distribution"):
         raise ArchiveError(f"unknown kind {kind}")
     apps = sorted(apps_dir.glob("*.app")) if apps_dir.is_dir() else []
@@ -272,7 +273,7 @@ def export_options(*, mode: str, team_id: str) -> bytes:
 
 def archived_export_compliance(info_plist: Path, config=None) -> None:
     """The archived app's export compliance answer, with the check the app's flow uses."""
-    if config is not None and config.ios is not None and config.ios.flow != "fud-ai":
+    if config is not None and config.ios is not None and config.ios.flow != STANDARD_FLOW:
         from store_release.flows import commands  # noqa: PLC0415
 
         commands.export_compliance(config.ios.flow, commands.module(config.ios.flow, "ios_release"),

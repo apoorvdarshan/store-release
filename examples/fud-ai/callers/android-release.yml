@@ -6,8 +6,7 @@
 #                           never uploads, signs with Sigstore or releases. store-plan
 #                           prints, read-only, what a tag run would change.
 #
-# Verifying a GitHub Release download built by store-release (earlier releases:
-# store/README.md):
+# Verifying a GitHub Release download built by store-release (docs/verification.md):
 #   cosign verify-blob fudai-vX.Y.apk --bundle fudai-vX.Y.apk.sigstore.json \
 #     --certificate-identity-regexp '^https://github\.com/apoorvdarshan/store-release/\.github/workflows/android-publish\.yml@[0-9a-f]{40}$' \
 #     --certificate-oidc-issuer https://token.actions.githubusercontent.com \

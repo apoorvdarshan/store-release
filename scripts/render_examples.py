@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Render examples/<app>/callers/ from examples/<app>/store-release.toml (a maintainer tool).
+"""Render examples/<app>/callers/ and examples/templates/ (a maintainer tool).
 
     python3 scripts/render_examples.py [--check]
 
 Each app gets the caller of every platform its config has, plus store-checks.yml, pinned to
 the placeholder commit 0000000000000000000000000000000000000000 with this package's version.
---check fails instead of writing when a committed caller differs (tests/workflows run it).
+Each template (examples/templates/<name>/) is exactly what `run.py init` writes for its
+answers (store_release.scaffold.TEMPLATES): the config, the callers and dependabot.yml.
+--check fails instead of writing when a committed file differs (tests/workflows run it).
 """
 from __future__ import annotations
 
@@ -15,7 +17,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
-from store_release import __version__, callers, config  # noqa: E402
+from store_release import __version__, callers, config, scaffold  # noqa: E402
 
 SHA = "0" * 40
 APPS = {"fud-ai": "apoorvdarshan/fud-ai", "scowld": "apoorvdarshan/scowld", "verceltics": "apoorvdarshan/verceltics",
@@ -33,19 +35,27 @@ def rendered(app: str) -> dict[str, str]:
     return out
 
 
+def expected() -> dict[Path, str]:
+    files = {}
+    for app in APPS:
+        for name, text in rendered(app).items():
+            files[REPO / "examples" / app / "callers" / name] = text
+    for name in scaffold.TEMPLATES:
+        for relative, text in scaffold.template_files(name).items():
+            files[REPO / "examples" / "templates" / name / relative] = text
+    return files
+
+
 def main(argv: list[str]) -> int:
     check = argv == ["--check"]
     stale = []
-    for app in APPS:
-        folder = REPO / "examples" / app / "callers"
-        for name, text in rendered(app).items():
-            path = folder / name
-            if check:
-                if not path.is_file() or path.read_text(encoding="utf-8") != text:
-                    stale.append(str(path.relative_to(REPO)))
-            else:
-                folder.mkdir(parents=True, exist_ok=True)
-                path.write_text(text, encoding="utf-8")
+    for path, text in expected().items():
+        if check:
+            if not path.is_file() or path.read_text(encoding="utf-8") != text:
+                stale.append(str(path.relative_to(REPO)))
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
     if stale:
         print("error: re-render these with scripts/render_examples.py: " + ", ".join(stale), file=sys.stderr)
         return 1
