@@ -68,13 +68,13 @@ Everything not listed here behaves exactly as fud-ai did.
 | D6 | Explicit secret mapping, with presence checks at the start of each secret-using job | a missing secret fails earlier, by name |
 | D7 | Listing, What's New and screenshot staging go to `RUNNER_TEMP`, never into the app checkout | none (the same bytes and file names are uploaded) |
 | D8 | `actions/setup-python` 3.13 in every job, including the macOS build job | none (the build job's tooling stays stdlib-only) |
-| D9 | Runtime caller check in prepare/gates (pins and concurrency) | fails only for a hand-edited caller |
+| D9 | Runtime caller check in prepare/gates (pins and concurrency), plus a warning when the pinned commit is not its version's release tag | fails only for a hand-edited caller |
 | D10 | Yanked versions: a warning in prepare/gates, a failure in PR checks | none until a version is yanked |
 | D11 | App hooks run with a scrubbed environment; the ASC key and issuer IDs are set only on the steps that need them | none |
 | D12 | The Play re-run detector also matches the job name `release / release` | needed inside a called workflow |
 | D13 | Check-run names become `<caller job> / <inner job>`; the PR workflow is `Store checks` (`checks / checks` plus `store-release`) | none required |
 | D14 | `STORE_SYNC_REVENUECAT` is parsed strictly (an invalid value fails); fud-ai read it loosely as off | none while it is unset |
-| D15 | PR checks add config, callers, pins, yanked, duplicate release-note headings, Pillow staging, project export compliance, project version and gradle parsing on the real files | PR-only |
+| D15 | PR checks add config, callers, pins (which must be the commit of their version's release tag), yanked, duplicate release-note headings, Pillow staging, project export compliance, project version and gradle parsing on the real files | PR-only |
 | D16 | Messages that named a code constant name the config key | wording only |
 | D17 | Preflight, build number and build wait use the read-only client | none (the same GETs) |
 | D18 | The Sigstore and attestation signer is `apoorvdarshan/store-release/.github/workflows/android-publish.yml@<sha>`; the repository extension is still the app's | verification commands change ([verification.md](verification.md)) |

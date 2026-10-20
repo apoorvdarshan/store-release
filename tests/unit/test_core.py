@@ -18,11 +18,13 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
-from store_release import catalog, cli, config, github, hooks, paths, release_notes, stage, switches, yanked
+from store_release import (__version__, callers, catalog, cli, config, github, hooks, paths, release_notes, stage,
+                           switches, yanked)
 from store_release.android import release as android_release
 from store_release.ios import release as ios_release
 from support import apps as support_apps
 from support import trees
+from support.tag_fakes import TagApi
 
 support_apps.configure_fud_ai_defaults()
 
@@ -1072,8 +1074,6 @@ class CallerRuntimeTests(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.root = Path(tmp.name)
-        from store_release import callers
-
         self.callers = callers
         cfg = config.load(FUD_AI_TOML)
         self.text = callers.render(cfg, "ios", sha=self.SHA, version="0.1.0")
@@ -1082,13 +1082,19 @@ class CallerRuntimeTests(unittest.TestCase):
         self.env = {"TOOL_SHA": self.SHA, "TOOL_REPOSITORY": "apoorvdarshan/store-release",
                     "GITHUB_REPOSITORY": "apoorvdarshan/fud-ai",
                     "GITHUB_WORKFLOW_REF": "apoorvdarshan/fud-ai/.github/workflows/ios-release.yml@refs/tags/ios-v7.2"}
+        self.tags = TagApi({f"v{__version__}": self.SHA})
 
-    def check(self, text: str) -> None:
+    def check(self, text: str, *, tags: TagApi | None = None) -> str:
         self.path.write_text(text)
-        quiet(self.callers.runtime_check, self.root, "ios", environ=self.env)
+        out = io.StringIO()
+        with redirect_stdout(out), redirect_stderr(io.StringIO()):
+            self.callers.runtime_check(self.root, "ios", environ=self.env, opener=tags or self.tags)
+        return out.getvalue()
 
     def test_the_rendered_caller_passes(self) -> None:
-        self.check(self.text)
+        out = self.check(self.text)
+        self.assertIn(f"the v{__version__} tag points at {self.SHA}", out)
+        self.assertNotIn("::warning", out)
 
     def test_wrong_or_mixed_pins_fail(self) -> None:
         mixed = self.text.replace(f"ios-build.yml@{self.SHA}", f"ios-build.yml@{'d' * 40}")
@@ -1116,7 +1122,86 @@ class CallerRuntimeTests(unittest.TestCase):
             env = {**self.env, key: value}
             self.path.write_text(self.text)
             with self.subTest(key=key), self.assertRaises(self.callers.CallerError):
-                quiet(self.callers.runtime_check, self.root, "ios", environ=env)
+                quiet(self.callers.runtime_check, self.root, "ios", environ=env, opener=self.tags)
+
+    def test_a_pin_the_release_tag_does_not_name_is_only_a_warning(self) -> None:
+        # A release never depends on mutable remote state: Store checks fail on these, a release run goes on.
+        cases = {
+            "untagged": (TagApi({}), f"has no release tag v{__version__}"),
+            "another commit": (TagApi({f"v{__version__}": "d" * 40}), f"v{__version__} is {'d' * 40}, not the pinned"),
+            "unreadable": (TagApi(error=urllib.error.URLError("offline")), "could not read"),
+        }
+        for name, (tags, fragment) in cases.items():
+            with self.subTest(case=name):
+                out = self.check(self.text, tags=tags)
+                self.assertIn("::warning title=store-release pin::", out)
+                self.assertIn(fragment, out)
+
+
+class ReleaseTagTests(unittest.TestCase):
+    """The release tag lookup behind pins check, caller check and callers render (fake GitHub API)."""
+
+    REPO = "apoorvdarshan/store-release"
+
+    def test_lightweight_and_annotated_tags_resolve_to_their_commit(self) -> None:
+        for annotated in (False, True):
+            tags = TagApi({"v0.1.0": SHA}, annotated=annotated)
+            with self.subTest(annotated=annotated):
+                self.assertEqual(callers.release_tag_commit(self.REPO, "0.1.0", environ={}, opener=tags), SHA)
+                self.assertEqual(len(tags.requests), 2 if annotated else 1)
+        self.assertIsNone(callers.release_tag_commit(self.REPO, "0.2.0", environ={}, opener=TagApi({"v0.1.0": SHA})))
+
+    def test_the_request(self) -> None:
+        tags = TagApi({"v0.1.0": SHA}, repository=self.REPO)
+        callers.release_tag_commit(self.REPO, "0.1.0", environ={"GH_TOKEN": "tok-123"}, opener=tags)
+        request = tags.requests[0]
+        self.assertEqual(request.full_url, f"https://api.github.com/repos/{self.REPO}/git/ref/tags/v0.1.0")
+        self.assertEqual(request.get_method(), "GET")
+        self.assertEqual(request.get_header("Authorization"), "Bearer tok-123")
+        self.assertNotIn("tok-123", request.full_url)
+        unauthenticated = TagApi({"v0.1.0": SHA})
+        callers.release_tag_commit(self.REPO, "0.1.0", environ={}, opener=unauthenticated)
+        self.assertIsNone(unauthenticated.requests[0].get_header("Authorization"))
+        seen = []
+
+        def enterprise(request, timeout=None):
+            seen.append(request.full_url)
+            raise urllib.error.HTTPError(request.full_url, 404, "Not Found", {}, io.BytesIO(b"{}"))
+
+        callers.release_tag_commit(self.REPO, "0.1.0", environ={"GITHUB_API_URL": "https://ghe.example/api/v3/"},
+                                   opener=enterprise)
+        self.assertEqual(seen, [f"https://ghe.example/api/v3/repos/{self.REPO}/git/ref/tags/v0.1.0"])
+
+    def test_failures_fail_closed(self) -> None:
+        def answer(body: bytes):
+            return lambda request, timeout=None: FakeResponse(body)
+
+        cases = [
+            (TagApi(error=urllib.error.HTTPError("u", 500, "boom", {}, io.BytesIO(b""))), "HTTP 500"),
+            (TagApi(error=urllib.error.URLError("offline")), "offline"),
+            (answer(b"not json"), "could not read"),
+            (answer(b"[]"), "unexpected response"),
+            (answer(json.dumps({"object": {"type": "tree", "sha": SHA}}).encode()), "does not resolve to a commit"),
+            (answer(json.dumps({"object": {"type": "commit", "sha": "abc"}}).encode()), "does not resolve to a commit"),
+            # An annotated tag pointing at itself never reaches a commit.
+            (answer(json.dumps({"object": {"type": "tag", "sha": SHA}}).encode()), "does not resolve to a commit"),
+        ]
+        for opener, fragment in cases:
+            with self.subTest(fragment=fragment), self.assertRaisesRegex(callers.CallerError, fragment):
+                callers.release_tag_commit(self.REPO, "0.1.0", environ={}, opener=opener)
+        with self.assertRaisesRegex(callers.CallerError, "owner/name"):
+            callers.release_tag_commit("bad repo", "0.1.0", environ={}, opener=TagApi())
+        with self.assertRaisesRegex(callers.CallerError, "must look like 0.1.0"):
+            callers.release_tag_commit(self.REPO, "v0.1", environ={}, opener=TagApi())
+
+    def test_check_release_tag(self) -> None:
+        self.assertEqual(callers.check_release_tag(SHA, self.REPO, environ={}, opener=TagApi({"v0.1.0": SHA}),
+                                                   version="0.1.0"), f"the v0.1.0 tag points at {SHA}")
+        with self.assertRaisesRegex(callers.CallerError, "has no release tag v0.1.0: pin the commit of a store-release"):
+            callers.check_release_tag(SHA, self.REPO, environ={}, opener=TagApi({}), version="0.1.0")
+        with self.assertRaisesRegex(callers.CallerError, f"v0.1.0 is {OTHER_SHA}, not the pinned {SHA}"):
+            callers.check_release_tag(SHA, self.REPO, environ={}, opener=TagApi({"v0.1.0": OTHER_SHA}),
+                                      version="0.1.0")
 
 
 FORBIDDEN = ("calorietracker", "fudai", "FudAI", "Fud AI", "6758935726", "23RV7FYH36",

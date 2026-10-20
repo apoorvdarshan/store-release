@@ -57,8 +57,8 @@ request. How the workflows fit together: [workflows](docs/workflows.md).
 ## Versioning
 
 SemVer tags `vX.Y.Z`, created by the Release workflow only after CI passed on that
-commit, never moved; apps pin the commit SHA with a `# vX.Y.Z` comment and receive
-updates through Dependabot. Changes and their impact on apps:
+commit, never moved; apps pin the commit SHA with a `# vX.Y.Z` comment (Store checks
+fail unless the tag points at that commit) and receive updates through Dependabot. Changes and their impact on apps:
 [CHANGELOG](CHANGELOG.md). Releasing, yanking and how apps update:
 [release process](docs/release-process.md), [yanked versions](docs/yanked.md).
 Re-runs: [rerun](docs/rerun.md). Verifying Android release files:

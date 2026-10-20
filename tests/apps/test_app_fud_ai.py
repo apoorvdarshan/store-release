@@ -12,6 +12,7 @@ from store_release.ios import asc
 from support import apps as support_apps
 from support import clirun, trees
 from support.play_fakes import FakePlay
+from support.tag_fakes import TagApi
 
 support_apps.configure_fud_ai_defaults()
 
@@ -235,17 +236,32 @@ class FudAiAppTests(unittest.TestCase):
         self.assertEqual(upload[:5], ["release", "upload", "android-v7.2", "--repo", "apoorvdarshan/fud-ai"])
         self.assertEqual(edit[-3:], ["--prerelease=false", "--latest=false", "--draft=false"])
 
+    def in_process(self, *args: str, tags: TagApi, **env: str) -> tuple[int, str, str]:
+        """The CLI in this process, against a fake GitHub API for the release tag."""
+        with mock.patch("urllib.request.urlopen", tags):
+            return clirun.in_process(["--app-root", str(self.root), *args], clirun.clean_env(**env))
+
     def test_callers_pins_and_runtime(self) -> None:
         env = dict(TOOL_SHA=SHA, TOOL_REPOSITORY="apoorvdarshan/store-release", GITHUB_REPOSITORY="apoorvdarshan/fud-ai")
+        tagged = TagApi({f"v{__version__}": SHA})
         for args in (("caller", "check", "--pr"), ("pins", "check")):
-            result = self.run_cli(*args, **env)
+            code, out, err = self.in_process(*args, tags=tagged, **env)
             with self.subTest(args=args):
-                self.assertEqual(result.returncode, 0, result.stderr)
-        result = self.run_cli("caller", "check", "--runtime", "--platform", "android", **env,
-                              GITHUB_WORKFLOW_REF="apoorvdarshan/fud-ai/.github/workflows/android-release.yml@refs/tags/x")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        result = self.run_cli("pins", "check", **{**env, "TOOL_SHA": "b2" * 20})
-        self.assertEqual(result.returncode, 1)
+                self.assertEqual(code, 0, err)
+                self.assertIn(f"the v{__version__} tag points at {SHA}", out)
+            code, _, err = self.in_process(*args, tags=TagApi({}), **env)
+            with self.subTest(args=args, tag="missing"):
+                self.assertEqual(code, 1)
+                self.assertIn(f"has no release tag v{__version__}", err)
+        runtime = ("caller", "check", "--runtime", "--platform", "android")
+        ref = "apoorvdarshan/fud-ai/.github/workflows/android-release.yml@refs/tags/x"
+        code, out, err = self.in_process(*runtime, tags=tagged, GITHUB_WORKFLOW_REF=ref, **env)
+        self.assertEqual(code, 0, err)
+        code, out, err = self.in_process(*runtime, tags=TagApi({}), GITHUB_WORKFLOW_REF=ref, **env)
+        self.assertEqual(code, 0, err)
+        self.assertIn("::warning title=store-release pin::", out)
+        code, _, err = self.in_process("pins", "check", tags=tagged, **{**env, "TOOL_SHA": "b2" * 20})
+        self.assertEqual(code, 1)
 
     def test_stage_checks_through_the_cli(self) -> None:
         good = ["stage", "check", "--stage", "ios-github-release", "--gates", "ios-tests=success quality=success",

@@ -32,8 +32,9 @@ commands:
   stage check        re-validate a stage's inputs and gate results
   secrets check      fail unless HAS_<NAME>=true for each secret name
   caller check       check the caller workflow (--runtime) or every caller (--pr)
-  callers render     render an app's caller workflow from its config
-  pins check         every store-release ref in the app's workflows is this version's SHA
+  callers render     render an app's caller workflow from its config (a release tag's commit)
+  pins check         every store-release ref in the app's workflows is this commit, and the
+                     v<version> release tag points at it
   yanked check       refuse (or, with --warn-only, warn about) a yanked store-release version
   print-switches     print the store switches (never mutates a store)
   release-notes      the tag's reviewed release notes (or --check-headings)

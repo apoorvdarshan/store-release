@@ -92,8 +92,10 @@ jobs:
         run: echo "tool_sha=$TOOL_SHA" >> "$GITHUB_OUTPUT"
       - name: Test the store release tooling (offline)
         run: python3 -I -u .store-release/run.py selftest --platform android
+      # A pin the release tag does not point at is only a warning here (Store checks fail on it).
       - name: Check the caller workflow
         env:
+          GH_TOKEN: ${{ github.token }}
           TOOL_SHA: ${{ job.workflow_sha }}
           TOOL_REPOSITORY: ${{ job.workflow_repository }}
         run: python3 -I -u .store-release/run.py --app-root app caller check --runtime --platform android
