@@ -89,7 +89,7 @@ jobs:
       # source-archive job made (ios-source-archive.yml).
       - name: Get the signed source archive
         if: env.STORE_RELEASE_IOS_SOURCE_ARCHIVE == 'true'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ios-source-archive-${{ github.run_id }}
           path: ${{ runner.temp }}/dist
