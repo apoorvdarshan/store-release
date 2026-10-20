@@ -8,7 +8,12 @@ or `config-breaking`.
 
 ## [Unreleased]
 
-Impact: release-path (the first release)
+## [0.1.0] - 2026-10-20
+
+Impact: release-path
+
+The first release: Fud AI's release pipeline, moved into a shared repository with its
+behaviour kept ([provenance](docs/provenance.md)).
 
 ### Added
 
@@ -58,17 +63,33 @@ Fud AI's migration (one PR in fud-ai, validated by dispatches before merge):
   `requirements-store.in/.txt`, `store/gates.env.example` and the unused
   `store/metadata` placeholders;
 - in `.github/dependabot.yml`, delete the root pip entry and add a `store-release`
-  group before the catch-all github-actions group;
+  group before the catch-all github-actions group (a `cooldown` of 7 days on it is
+  suggested: these pins run with the app's signing credentials);
 - trim `store/README.md` to Fud AI facts, linking to these docs.
 
 No switch, secret or variable changes.
 
 ### Verification
 
+- CI on `main` at `6eaa676351feeb37ed42f0d648983feaaa051778`, the code this release
+  tags (the release commit changes only this file and `docs/rerun.md`):
+  [CI 39473468499](https://github.com/apoorvdarshan/store-release/actions/runs/39473468499)
+  (`test (stdlib)`, `test (strict)`, `test (macos)`, `lint`, `workflows`, and the
+  advisory `canary (fud-ai)`, which ran the store checks on fud-ai's `main` and found
+  its pinned files intact) and
+  [CodeQL 39473468458](https://github.com/apoorvdarshan/store-release/actions/runs/39473468458)
+  (`Analyze (python)`, `Analyze (actions)`). `release.yml` checks the required ones
+  again on the release commit.
 - Re-run probe: passed with `--failed`
-  ([39459054072](https://github.com/apoorvdarshan/store-release/actions/runs/39459054072))
+  ([39459054072](https://github.com/apoorvdarshan/store-release/actions/runs/39459054072),
+  and again on `6eaa676`:
+  [39473507701](https://github.com/apoorvdarshan/store-release/actions/runs/39473507701))
   and `--job`
   ([39459383671](https://github.com/apoorvdarshan/store-release/actions/runs/39459383671));
   see [docs/rerun.md](docs/rerun.md#results).
-- CI, the canary and Fud AI's validation dispatches with their store-plan results:
-  recorded when the release is cut.
+- Fud AI's validation dispatches and their store plans are the gate of Fud AI's
+  migration PR, the next phase; they have not run yet. A defect they find ships as
+  v0.1.1 (tags never move).
+
+[Unreleased]: https://github.com/apoorvdarshan/store-release/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/apoorvdarshan/store-release/releases/tag/v0.1.0

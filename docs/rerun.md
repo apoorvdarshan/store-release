@@ -65,15 +65,18 @@ every app.
 
 ### Results
 
-Both passed on 2026-10-20, with `probe-rerun.yml` at `6ba72a7546e7e515710a62238a7ce2533765b3b9`
-calling `probe-inner.yml@a8c2f4aba5cf8ac9f759a318338d6f0d6beffa15`:
+All passed on 2026-10-20, with `probe-rerun.yml` at `6ba72a7546e7e515710a62238a7ce2533765b3b9`
+(the first two) and at `6eaa676351feeb37ed42f0d648983feaaa051778` (the third, after the
+workflow changes that preceded v0.1.0), calling
+`probe-inner.yml@a8c2f4aba5cf8ac9f759a318338d6f0d6beffa15`:
 
 | Run | Re-run with | Attempt 2 ran | `c` received (attempt 2) | `job.workflow_sha` (both attempts) | `PROBE_VAR` |
 |---|---|---|---|---|---|
 | [39459054072](https://github.com/apoorvdarshan/store-release/actions/runs/39459054072) | `gh run rerun 39459054072 --failed` | `c`, `d` | `39459054072.1` (`b`'s attempt-1 id) | `a8c2f4aba5cf8ac9f759a318338d6f0d6beffa15` | `probe` |
 | [39459383671](https://github.com/apoorvdarshan/store-release/actions/runs/39459383671) | `gh run rerun 39459383671 --job 118754645388` (`c / probe`) | `c`, `d` | `39459383671.1` (`b`'s attempt-1 id) | `a8c2f4aba5cf8ac9f759a318338d6f0d6beffa15` | `probe` |
+| [39473507701](https://github.com/apoorvdarshan/store-release/actions/runs/39473507701) | `gh run rerun 39473507701 --failed` | `c`, `d` | `39473507701.1` (`b`'s attempt-1 id) | `a8c2f4aba5cf8ac9f759a318338d6f0d6beffa15` | `probe` |
 
-In both attempt 2s, `a` and `b / probe` keep their attempt-1 records (same start
+In every attempt 2, `a` and `b / probe` keep their attempt-1 records (same start
 and finish times; `b`'s log still says `attempt=1`), while `c / probe` and `d` ran
 again. So a re-run keeps the outputs of the stages that passed (as
 `wait-for-build`'s `build_id` must be kept), runs the failed stage and its
