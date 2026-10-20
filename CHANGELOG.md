@@ -21,6 +21,21 @@ Impact: release-path
   for placeholder values; a test and `scripts/render_examples.py --check` keep them equal.
 - `ios.build.runner` (optional): the build job's runner label, passed to `ios-build.yml`
   only when set, so every existing caller renders as before.
+- Docs for any developer: a README with the features, a quickstart (config, callers,
+  secrets, switches, validation, tags, Dependabot), release verification and the apps
+  that use store-release; a complete config reference (every key with its type, default,
+  example and meaning); how to get each secret; the switches with their defaults; a
+  troubleshooting and FAQ page; the release assets, their verification and the
+  stuck-draft recovery in [release-process.md](docs/release-process.md); and CONTRIBUTING
+  for outside contributors. The history of the code, including the Fud AI parity notes,
+  the six apps' shared CI signing identity and the per-app plan, moved to
+  [provenance.md](docs/provenance.md).
+- `tests/workflows/test_docs.py` keeps the docs from drifting: it fails when the parser
+  reads a config key `config.md` does not list (or `config.md` lists one it does not read),
+  when a config row lacks a type, default or TOML example, when a switch's documented
+  default is wrong, when `secrets.md` and a reusable workflow's `secrets:` disagree, when
+  the troubleshooting page quotes a message the code no longer prints, and when a
+  user-facing page promises Fud AI parity.
 
 ### Changed
 
@@ -38,6 +53,8 @@ Impact: release-path
   passes. `listing prepare`, `whats-new prepare` and `screenshots stage` with
   `--platform all` skip a platform without its table; an explicit platform is unchanged.
   An app with every table (Fud AI) runs exactly the same steps.
+- `android.whats_new.version_file` is refused (only the quit-all flow, on iOS, reads a
+  What's New version file); the verceltics flow accepted it and ignored it.
 - No app's identity appears outside `store_release/flows/`: a test now checks the six
   apps' names, bundle ids, App Store Connect ids, team, packages, upload certificates and
   product prefixes, and any account or e-mail address, in the package, the reusable

@@ -277,6 +277,12 @@ class ConfigValueTests(unittest.TestCase):
         with self.assertRaisesRegex(config.ConfigError, "android.flow: 'scowld'"):
             config.parse(data)
 
+    def test_androids_whats_new_takes_no_version_file(self) -> None:
+        data = tomllib.loads((TOOL_ROOT / "examples" / "verceltics" / "store-release.toml").read_text())
+        data["android"]["whats_new"]["version_file"] = "whats_new_version.txt"
+        with self.assertRaisesRegex(config.ConfigError, "android.whats_new.version_file: only the quit-all flow"):
+            config.parse(data)
+
     def test_the_build_runner(self) -> None:
         self.assertIsNone(config.parse(fud_ai_data()).ios.build.runner)
         cfg = config.parse(mutated("ios.build.developer_dir", "/Applications/Xcode_26.app/Contents/Developer"))

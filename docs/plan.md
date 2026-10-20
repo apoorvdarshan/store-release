@@ -3,9 +3,10 @@
 Every validation dispatch (**Run workflow** on iOS Release or Android Release) runs a
 `store-plan` job next to the validation build. It prints what a tag run of
 `<tag_prefix><version>` would do in App Store Connect, Google Play and GitHub Releases
-with the repository's current switch values, and sends no write. A clean plan on an
-app's migration branch is part of the gate before the app moves to a new
-store-release version.
+with the repository's current switch values, and sends no write. Read it before the first
+tag of a new setup, after changing switches, and before moving an app to a new
+store-release version. This page describes the standard flow's plan; a ported flow's plan
+runs that flow's own read-only checks ([flows.md](flows.md)).
 
 ## Contract
 
@@ -70,18 +71,19 @@ tests assert that the transport saw only GETs.
 
 ## Example
 
-Fud AI's current switches, with an illustrative App Store Connect state:
+An app with the master switch, version creation and build upload on, with an illustrative
+App Store Connect state:
 
 ```
-store-plan ios: Fud AI 7.2 (tag ios-v7.2), store-release v0.2.0 (<sha>)
+store-plan ios: My App 1.3 (tag ios-v1.3), store-release v0.3.0 (<sha>)
 switches a tag run would use: master=on create_version=on upload_build=on listing=off whats_new=off screenshots=off creative=off submit=off public_release=off
-1. create-version: App Store version 7.2 is missing → WOULD CREATE (POST /appStoreVersions)
-   refusal checks passed: 7.1.2 READY_FOR_SALE; 7.2 is newer than every version
-2. build: next build number 41 (project 39, highest uploaded 40); xcodebuild uploads the binary
+1. create-version: App Store version 1.3 is missing → WOULD CREATE (POST /appStoreVersions)
+   refusal checks passed: 1.2.1 READY_FOR_SALE; 1.3 is newer than every version
+2. build: next build number 18 (project 12, highest uploaded 17); xcodebuild uploads the binary
 3. store step: not planned (no listing/What's New/screenshot/creative/review switch on)
-4. GitHub Release: create the release ios-v7.2 titled 'iOS 7.2 (build 41)' with --latest
+4. GitHub Release: create the release ios-v1.3 titled 'iOS 1.3 (build 18)' with --latest
 writes a tag run would make, in order:
-  POST /appStoreVersions  create the App Store version: {platform: IOS, versionString: 7.2}
+  POST /appStoreVersions  create the App Store version: {platform: IOS, versionString: 1.3}
 problems a tag run would hit: none
 store-plan: CLEAN
 ```
