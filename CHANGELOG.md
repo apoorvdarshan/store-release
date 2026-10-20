@@ -8,7 +8,15 @@ or `config-breaking`.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-21
+
 Impact: release-path
+
+store-release for any developer's apps: `run.py init` and templates set up a new app,
+private repositories and generated Info.plists work, Store checks pass for apps without
+listings or screenshots, the docs are written for anyone (and tested against the code),
+and no app's values are left in the shared code. The six apps that use it keep their
+behaviour, configs and callers.
 
 ### Added
 
@@ -75,11 +83,43 @@ Impact: release-path
   `caller check --pr` ignores the Run workflow inputs' descriptions, like comments, so
   callers rendered by v0.2.0 keep passing.
 
+### Security
+
+- certifi 2026.10.19 (shipped in v0.2.0, whose entry did not name the advisory):
+  [GHSA-6q48-6c7w-9gw2](https://github.com/advisories/GHSA-6q48-6c7w-9gw2), critical:
+  certifi before 2026.10.19 bundled emSign root certificates whose intermediate CA keys
+  were compromised. `requirements.txt` pins the fixed release; anything still on v0.1.0
+  should update.
+
 ### App actions required
 
 None. Existing configs and callers keep working unchanged: the rendered callers differ
 only in a comment (Android) and an input description (iOS), which `caller check --pr`
-ignores. Re-render them to pick up the new wording.
+ignores. Re-render them to pick up the new wording. An app still configured with
+`flow = "fud-ai"` keeps working; `"standard"` is the new name.
+
+### Verification
+
+- CI on `main` at `e2fbb27766ea6cfe9a26844b4936e43dd84ae3a5`, the code this release tags
+  (the release commit changes only this file, `__version__`, and the version in the
+  examples' and templates' rendered callers and config header):
+  [CI 39514758881](https://github.com/apoorvdarshan/store-release/actions/runs/39514758881)
+  (`test (stdlib)`, `test (strict)`, `test (macos)`, `lint`, `workflows`, and the advisory
+  `canary (fud-ai)`, which ran the store checks on fud-ai's `main`) and
+  [CodeQL 39514758924](https://github.com/apoorvdarshan/store-release/actions/runs/39514758924)
+  (`Analyze (python)`, `Analyze (actions)`). `release.yml` checks the required ones again on
+  the release commit.
+- job-setup's lazy blob fetch with a job token ran on GitHub in the `workflows` job (a
+  blobless, credential-free checkout fetched its patterns; no credential reached
+  `.git/config`).
+- Apps scaffolded by `init` (iOS, Android, both, and a generated Info.plist) pass the
+  whole Store checks sequence, `caller check --pr` and `pins check`
+  (`tests/apps/test_checks_sequence.py`), and the templates are `init`'s output.
+- Re-run probe: not run again. `probe-rerun.yml` and `probe-inner.yml` are unchanged since
+  the v0.1.0 results ([docs/rerun.md](docs/rerun.md#results)), and the callers call the
+  same jobs the same way.
+- No app validation dispatches yet: each app moves to v0.3.0 in its own pull request
+  (Dependabot), validated there. A defect they find ships as v0.3.1 (tags never move).
 
 ## [0.2.0] - 2026-10-21
 
@@ -239,6 +279,7 @@ No switch, secret or variable changes.
   migration PR, the next phase; they have not run yet. A defect they find ships as
   v0.1.1 (tags never move).
 
-[Unreleased]: https://github.com/apoorvdarshan/store-release/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/apoorvdarshan/store-release/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/apoorvdarshan/store-release/releases/tag/v0.3.0
 [0.2.0]: https://github.com/apoorvdarshan/store-release/releases/tag/v0.2.0
 [0.1.0]: https://github.com/apoorvdarshan/store-release/releases/tag/v0.1.0
