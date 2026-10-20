@@ -1,0 +1,12 @@
+{
+  "app": "com.apoorvdarshan.Abysm",
+  "nonConsumables": [
+    {
+      "id": "com.apoorvdarshan.Abysm.unlockdeep",
+      "referenceName": "Unlock the Deep",
+      "entitlement": "deep"
+    }
+  ],
+  "consumables": [],
+  "subscriptions": []
+}

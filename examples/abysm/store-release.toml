@@ -1,0 +1,87 @@
+# ABYSM's store-release configuration. Schema:
+# https://github.com/apoorvdarshan/store-release/blob/v0.2.0/docs/config.md
+# Switches stay in repository variables and secrets in repository secrets.
+schema = 1
+
+[app]
+name = "ABYSM"
+slug = "abysm"
+
+[release_notes]
+path = "RELEASE_NOTES.md"
+
+[catalog]
+path = "store/catalog/products.json"
+groups = ["nonConsumables", "consumables", "subscriptions"]
+id_prefix = "com.apoorvdarshan.Abysm."
+storekit = "Abysm.storekit"
+products_source = "Abysm/StoreManager.swift"
+
+[checks]
+paths = [
+  "store/**",
+  "RELEASE_NOTES.md",
+  "Abysm.storekit",
+  "Abysm/StoreManager.swift",
+  "Abysm/Info.plist",
+  "Abysm.xcodeproj/project.pbxproj",
+  ".github/workflows/ios-release.yml",
+  ".github/workflows/store-checks.yml",
+]
+
+[ios]
+# ABYSM's own release scripts (scripts/store at a12a6d2), ported unchanged.
+flow = "abysm"
+tag_prefix = "v"
+bundle_id = "com.apoorvdarshan.Abysm"
+asc_app_id = "6783505799"
+team_id = "23RV7FYH36"
+project = "Abysm.xcodeproj"
+scheme = "Abysm"
+app_target = "Abysm"
+locale = "en-US"
+gate_jobs = [
+  { id = "quality", uses = "./.github/workflows/ios-tests.yml" },
+]
+gate_policy = "parallel"
+
+[ios.build]
+developer_dir = "/Applications/Xcode_27.app/Contents/Developer"
+checkout = ["/Abysm/", "/Abysm.xcodeproj/", "/Abysm.storekit", "/AbysmTests/", "/AbysmUITests/"]
+package_cache_files = ["Abysm.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved"]
+
+[ios.listing]
+source = "files"
+dir = "store/metadata/ios"
+
+[ios.whats_new]
+source = "files"
+
+[[ios.screenshots.sets]]
+display_type = "APP_IPHONE_67"
+dir = "store/metadata/screenshots/ios/iphone"
+required = true
+
+[[ios.screenshots.sets]]
+display_type = "APP_IPAD_PRO_3GEN_129"
+dir = "store/metadata/screenshots/ios/ipad"
+required = true
+
+[[ios.screenshots.sets]]
+display_type = "APP_IPHONE_DUO"
+dir = "store/metadata/screenshots/ios/iphone-duo"
+required = false
+
+[[ios.screenshots.sets]]
+display_type = "WATCH"
+dir = "store/metadata/screenshots/ios/watch"
+required = false
+
+[ios.creative]
+dir = "store/creative/ios"
+
+[ios.github_release]
+# "ABYSM v1.0.1 (build 7)"; " (build N)" only when this run uploaded a build.
+title = "ABYSM {tag}{build_suffix}"
+on_existing = "keep"
+latest = "always"

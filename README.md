@@ -4,8 +4,9 @@ Reusable GitHub Actions workflows and Python tooling that build, sign and publis
 and Android apps to App Store Connect and Google Play, pinned by commit SHA.
 
 It started as [Fud AI](https://github.com/apoorvdarshan/fud-ai)'s release pipeline
-and keeps its behaviour exactly ([provenance](docs/provenance.md)); other apps move
-over one per minor release ([roadmap](docs/roadmap.md)).
+and keeps its behaviour exactly ([provenance](docs/provenance.md)). From v0.2.0 it
+also runs Scowld, Verceltics, ABYSM, PCM Notes and Quit All, each through a port of
+its own pipeline ([flows](docs/flows.md), [examples](examples/)).
 
 ## How an app uses it
 

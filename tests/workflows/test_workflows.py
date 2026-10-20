@@ -15,7 +15,9 @@ KEYSTORE = ("ANDROID_KEYSTORE_BASE64", "ANDROID_KEYSTORE_PASSWORD", "ANDROID_KEY
 # here: Dependabot bumps them (one grouped PR moves every file), and test_pins keeps them consistent.
 RELEASE_ACTIONS = {"actions/checkout", "actions/setup-python", "actions/cache", "actions/upload-artifact",
                    "actions/setup-java", "gradle/actions/setup-gradle", "sigstore/cosign-installer",
-                   "actions/attest-build-provenance", "r0adkll/upload-google-play"}
+                   "actions/attest-build-provenance", "r0adkll/upload-google-play",
+                   # v0.2.0: the source archive hand-off (Scowld) and the Android SDK packages (Verceltics).
+                   "actions/download-artifact", "android-actions/setup-android"}
 SCALAR_OUTPUTS = {"mode", "create_version", "build", "upload_build", "listing", "whats_new", "screenshots", "creative",
                   "submit", "public_release", "asc", "poll_seconds", "wait_minutes", "marketing_version",
                   "build_number", "tool_sha", "upload_started_at", "build_id", "github_release", "production",
@@ -45,6 +47,10 @@ INTERFACES = {
     "ios-github-release.yml": ("github-release", "ubuntu-latest", 10, {"contents": "write"},
                                {"config": False, "gates": True, "marketing_version": True, "uploaded_build": True,
                                 "tool_sha": True}, {}, []),
+    "ios-source-archive.yml": ("source-archive", "ubuntu-latest", 10,
+                               {"contents": "read", "id-token": "write", "attestations": "write"},
+                               {"config": False, "gates": True, "marketing_version": True, "uploaded_build": True,
+                                "tool_sha": True}, {}, []),
     "ios-store-plan.yml": ("store-plan", "ubuntu-latest", 15, {"contents": "read"},
                            {"config": False, "marketing_version": True, "tool_sha": True},
                            {name: True for name in ASC}, []),
@@ -54,10 +60,13 @@ INTERFACES = {
                            "play_upload", "play_tracks", "tool_sha"]),
     "android-publish.yml": ("release", "ubuntu-latest", 60,
                             {"contents": "write", "id-token": "write", "attestations": "write", "actions": "read"},
-                            {"config": False, **{name: True for name in (
+                            {"config": False, "keystore_only": False, **{name: True for name in (
                                 "gates", "mode", "build", "github_release", "listing", "whats_new", "screenshots",
                                 "production", "play_upload", "play_tracks", "tool_sha")}},
-                            {**{name: True for name in KEYSTORE}, "PLAY_SERVICE_ACCOUNT_JSON": False}, []),
+                            # The key alias and password: only keystore-properties signing uses them.
+                            {"ANDROID_KEYSTORE_BASE64": True, "ANDROID_KEYSTORE_PASSWORD": True,
+                             "ANDROID_KEY_ALIAS": False, "ANDROID_KEY_PASSWORD": False,
+                             "PLAY_SERVICE_ACCOUNT_JSON": False}, []),
     "android-store-plan.yml": ("store-plan", "ubuntu-latest", 15, {"contents": "read"},
                                {"config": False, "tool_sha": True}, {"PLAY_SERVICE_ACCOUNT_JSON": False}, []),
     "checks.yml": ("checks", "ubuntu-latest", 15, {"contents": "read"}, {"config": False}, {}, []),
@@ -221,7 +230,12 @@ class ReusableWorkflowTests(unittest.TestCase):
         job_id, job = only_job(load("android-publish.yml"))
         self.assertEqual(job_id, "release")
         uploads = [step["name"] for step in job["steps"] if step.get("name", "").startswith("Upload to Play")]
-        self.assertEqual(len(uploads), 2)
+        # Two per flow: the fud-ai flow's (plaintext key) and the verceltics flow's (key file).
+        self.assertEqual(len(uploads), 4)
+        for step in job["steps"]:
+            if step.get("name", "").startswith("Upload to Play"):
+                flow = "!=" if "ported flow" in step["name"] else "=="
+                self.assertIn(f"env.STORE_RELEASE_ANDROID_FLOW {flow} 'fud-ai'", step["if"])
         for step in job["steps"]:
             if step.get("uses", "").startswith("r0adkll/upload-google-play"):
                 self.assertIn("inputs.play_tracks != ''", step["if"])
@@ -244,7 +258,7 @@ class ReusableWorkflowTests(unittest.TestCase):
         # STORE_SYNC_REVENUECAT on every Android tag run, before anything is built; the gate stays in the release job.
         gates = steps("android-gates.yml")
         switch = gates[index(gates, "Check the RevenueCat switch")]
-        self.assertEqual(switch["if"], "github.event_name == 'push'")
+        self.assertEqual(switch["if"], "github.event_name == 'push' && env.STORE_RELEASE_ANDROID_FLOW == 'fud-ai'")
         self.assertEqual(switch["env"], {"STORE_SYNC_REVENUECAT": "${{ vars.STORE_SYNC_REVENUECAT }}"})
         self.assertIn("revenuecat-gate --check-switch", switch["run"])
         publish = steps("android-publish.yml")

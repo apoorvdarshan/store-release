@@ -73,12 +73,20 @@ jobs:
       - name: Check every file the config names
         run: python3 -I -u .store-release/run.py --app-root app config check --files
       - name: Validate IAP / subscription / tip catalog
+        if: env.STORE_RELEASE_PORTED_FLOW != 'true'
         run: python3 -I -u .store-release/run.py --app-root app catalog check
+      # A ported flow's catalog validator (the app's own, run as its pull requests ran it).
+      - name: Validate the IAP catalog (ported flow)
+        if: env.STORE_RELEASE_PORTED_FLOW == 'true'
+        run: python3 -I -u .store-release/run.py --app-root app catalog check --platform all --event pull_request
       - name: Prepare What's New (dry-run)
+        if: env.STORE_RELEASE_PORTED_FLOW != 'true'
         run: python3 -I -u .store-release/run.py --app-root app whats-new prepare --platform all --tag dry-run --out "$RUNNER_TEMP/whatsnew"
       - name: Prepare listing text (dry-run)
+        if: env.STORE_RELEASE_PORTED_FLOW != 'true'
         run: python3 -I -u .store-release/run.py --app-root app listing prepare --platform all --out "$RUNNER_TEMP/listing"
       - name: Prepare the metadata layout (no store APIs)
+        if: env.STORE_RELEASE_PORTED_FLOW != 'true'
         run: |
           set -euo pipefail
           python3 -I -u .store-release/run.py --app-root app listing prepare --platform all --out "$RUNNER_TEMP/store-meta"
@@ -87,30 +95,32 @@ jobs:
       # The platform steps run only for the platforms the config has (config export sets
       # STORE_RELEASE_HAS_IOS and STORE_RELEASE_HAS_ANDROID for this job).
       - name: Validate the ASC store steps (dry-run, no network)
-        if: env.STORE_RELEASE_HAS_IOS == 'true'
+        if: env.STORE_RELEASE_HAS_IOS == 'true' && env.STORE_RELEASE_PORTED_FLOW != 'true'
         run: |
           set -euo pipefail
           UPLOAD_LISTING=true UPLOAD_WHATS_NEW=true SUBMIT_IOS_REVIEW=true PUBLIC_RELEASE=false \
             python3 -I -u .store-release/run.py --app-root app ios store-step --dry-run --metadata-dir "$RUNNER_TEMP/store-meta" --build-id DRY-RUN --build-number 1
           UPLOAD_CREATIVE_ASSETS=true python3 -I -u .store-release/run.py --app-root app ios store-step --dry-run
       - name: Validate the Play publisher step (dry-run, no network)
-        if: env.STORE_RELEASE_HAS_ANDROID == 'true'
+        if: env.STORE_RELEASE_HAS_ANDROID == 'true' && env.STORE_RELEASE_PORTED_FLOW != 'true'
         run: UPLOAD_LISTING=true python3 -I -u .store-release/run.py --app-root app android play-listing --dry-run --metadata-dir "$RUNNER_TEMP/store-meta"
       - name: RevenueCat catalog dry-run
+        if: env.STORE_RELEASE_PORTED_FLOW != 'true'
         env:
           STORE_SYNC_REVENUECAT: "false"
         run: python3 -I -u .store-release/run.py --app-root app revenuecat-gate
       - name: Check the project version and export compliance
-        if: env.STORE_RELEASE_HAS_IOS == 'true'
+        if: env.STORE_RELEASE_HAS_IOS == 'true' && env.STORE_RELEASE_PORTED_FLOW != 'true'
         run: |
           set -euo pipefail
           python3 -I -u .store-release/run.py --app-root app ios project-version --setting MARKETING_VERSION
           python3 -I -u .store-release/run.py --app-root app ios project-version --setting CURRENT_PROJECT_VERSION
           python3 -I -u .store-release/run.py --app-root app ios export-compliance --project
       - name: Check the gradle version
-        if: env.STORE_RELEASE_HAS_ANDROID == 'true'
+        if: env.STORE_RELEASE_HAS_ANDROID == 'true' && env.STORE_RELEASE_PORTED_FLOW != 'true'
         run: python3 -I -u .store-release/run.py --app-root app android gradle-version
       - name: Check release notes headings
+        if: env.STORE_RELEASE_UNIQUE_HEADINGS == 'true'
         run: python3 -I -u .store-release/run.py --app-root app release-notes --check-headings
       # Release jobs install this hash-locked set before touching a store, so a broken
       # pin (for example a Dependabot bump) fails here instead of in a release.
@@ -125,9 +135,22 @@ jobs:
       - name: Test screenshot staging with Pillow (offline)
         run: python3 -I -u .store-release/run.py selftest --pillow-only --require-pillow
       - name: Stage every screenshot set for upload (Pillow, no store APIs)
+        if: env.STORE_RELEASE_PORTED_FLOW != 'true'
         env:
           STORE_UPLOAD_SCREENSHOTS: "true"
         run: python3 -I -u .store-release/run.py --app-root app screenshots stage --platform all --out "$RUNNER_TEMP/staged-for-upload"
+      # A ported flow's own pull request checks: the committed store files with every switch
+      # on, through that app's dry-run (RGB screenshot copies with Pillow included).
+      - name: Check the committed store files (ported flow, dry-run, no store APIs)
+        if: env.STORE_RELEASE_PORTED_FLOW == 'true'
+        run: |
+          set -euo pipefail
+          if [ "$STORE_RELEASE_HAS_IOS" = true ] && [ "${STORE_RELEASE_IOS_FLOW:-fud-ai}" != fud-ai ]; then
+            python3 -I -u .store-release/run.py --app-root app ios pr-checks
+          fi
+          if [ "$STORE_RELEASE_HAS_ANDROID" = true ] && [ "${STORE_RELEASE_ANDROID_FLOW:-fud-ai}" != fud-ai ]; then
+            python3 -I -u .store-release/run.py --app-root app android pr-checks
+          fi
       # Also reads (read-only) which commit the pinned version's release tag points at.
       - name: Check the callers and their pins
         env:
@@ -144,6 +167,7 @@ jobs:
           TOOL_REPOSITORY: ${{ job.workflow_repository }}
         run: python3 -I -u .store-release/run.py yanked check
       - name: Upload prepared artifacts (inspection only)
+        if: env.STORE_RELEASE_PORTED_FLOW != 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: store-metadata-dry-run

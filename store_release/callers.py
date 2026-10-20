@@ -164,6 +164,43 @@ def _header_rows(rows: list[tuple[str, list[str]]]) -> list[str]:
     return lines
 
 
+def _gate_inputs(job) -> list[str]:
+    """A gate job's `with:` inputs (ios.gate_jobs[].with / android.gate_jobs[].with)."""
+    if not job.inputs:
+        return []
+
+    def scalar(value) -> str:
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        if isinstance(value, int):
+            return str(value)
+        return f'"{value}"'
+
+    return ["    with:"] + [f"      {name}: {scalar(value)}" for name, value in job.inputs]
+
+
+def _source_archive_job(repository: str, sha: str, version: str, config_path: str, release_if: list[str],
+                        gate_results: str, needs) -> list[str]:
+    """ios.github_release.source_archive: the job that archives, signs and attests the tagged source."""
+    return [
+        "  # The tagged source as an archive, signed with Sigstore and attested (it alone needs id-token).",
+        "  source-archive:",
+        f"    needs: {needs('prepare', 'build', 'wait-for-build', 'app-store-connect')}",
+        "    if: >-",
+        *release_if,
+        f"    {_uses(repository, 'ios-source-archive.yml', sha, version)}",
+        "    permissions:",
+        "      contents: read",
+        "      id-token: write",
+        "      attestations: write",
+        *_with([("gates", f'"{gate_results}"'),
+                ("marketing_version", "${{ needs.prepare.outputs.marketing_version }}"),
+                ("uploaded_build", "${{ needs.build.result == 'success' && needs.prepare.outputs.build_number || '' }}"),
+                ("tool_sha", "${{ needs.prepare.outputs.tool_sha }}")], config_path),
+        "",
+    ]
+
+
 def _regex_repository(repository: str) -> str:
     return repository.replace(".", r"\.")
 
@@ -178,7 +215,29 @@ def render_ios(config: Config, *, sha: str, version: str, repository: str = DEFA
     gate_results = " ".join(f"{gate}=${{{{ needs.{gate}.result }}}}" for gate in gates)
     all_success = " && ".join(f"needs.{gate}.result == 'success'" for gate in gates)
     all_skipped = " && ".join(f"needs.{gate}.result == 'skipped'" for gate in gates)
-    needs = lambda *extra: "[" + ", ".join([*gates, *extra]) + "]"  # noqa: E731
+    if ios.gate_policy == "parallel":
+        needs = lambda *extra: "[" + ", ".join([*gates, *extra]) + "]"  # noqa: E731
+    else:
+        # The gate jobs need prepare, so prepare comes first (as Quit All's and PCM Notes' callers had it).
+        needs = lambda *extra: "[" + ", ".join([*extra[:1], *gates, *extra[1:]]) + "]"  # noqa: E731
+    archive_job = ("source-archive",) if ios.source_archive else ()
+    if ios.gate_policy != "when-uploading":
+        release_if = [
+            "      !cancelled() && github.event_name == 'push' &&",
+            *[f"      needs.{gate}.result == 'success' &&" for gate in gates[:-1]],
+            f"      needs.{gates[-1]}.result == 'success' && needs.prepare.result == 'success' &&",
+            "      (needs.build.result == 'success' || needs.build.result == 'skipped') &&",
+            "      (needs.wait-for-build.result == 'success' || needs.wait-for-build.result == 'skipped') &&",
+            "      (needs.app-store-connect.result == 'success' || needs.app-store-connect.result == 'skipped')",
+        ]
+    else:
+        release_if = [
+            "      !cancelled() && github.event_name == 'push' && needs.prepare.result == 'success' &&",
+            "      (needs.prepare.outputs.upload_build != 'true' ||",
+            f"       ({all_success} &&",
+            "        needs.build.result == 'success' && needs.wait-for-build.result == 'success')) &&",
+            "      (needs.prepare.outputs.asc != 'true' || needs.app-store-connect.result == 'success')",
+        ]
     lines = [
         f"# iOS Release: a thin caller of {repository}, pinned by commit SHA.",
         "# Rendered by `run.py callers render --platform ios`; Store checks fails when it drifts.",
@@ -220,9 +279,16 @@ def render_ios(config: Config, *, sha: str, version: str, repository: str = DEFA
         "",
         "jobs:",
     ]
+    policy = ios.gate_policy
     for job in ios.gate_jobs:
-        lines += [f"  {job.id}:", "    if: github.event_name == 'push'", f"    uses: {job.uses}", "    permissions:",
-                  "      contents: read", ""]
+        if policy == "parallel":
+            lines += [f"  {job.id}:", "    if: github.event_name == 'push'"]
+        elif policy == "after-prepare":
+            lines += [f"  {job.id}:", "    needs: prepare", "    if: github.event_name == 'push'"]
+        else:
+            lines += [f"  {job.id}:", "    needs: prepare",
+                      "    if: needs.prepare.outputs.mode == 'release' && needs.prepare.outputs.upload_build == 'true'"]
+        lines += [f"    uses: {job.uses}", "    permissions:", "      contents: read", *_gate_inputs(job), ""]
     lines += [
         "  prepare:",
         f"    {_uses(repository, 'ios-prepare.yml', sha, version)}",
@@ -238,7 +304,8 @@ def render_ios(config: Config, *, sha: str, version: str, repository: str = DEFA
         "      !cancelled() && needs.prepare.result == 'success' &&",
         "      needs.prepare.outputs.build == 'true' &&",
         f"      (({all_success}) ||",
-        "       (github.event_name == 'workflow_dispatch' &&",
+        *(["       (github.event_name == 'workflow_dispatch' &&"] if policy != "when-uploading"
+          else ["       (needs.prepare.outputs.mode == 'validate' &&"]),
         f"        {all_skipped}))",
         f"    {_uses(repository, 'ios-build.yml', sha, version)}",
         "    permissions:",
@@ -279,10 +346,15 @@ def render_ios(config: Config, *, sha: str, version: str, repository: str = DEFA
         "      !cancelled() && needs.prepare.result == 'success' &&",
         "      needs.prepare.outputs.mode == 'release' &&",
         "      needs.prepare.outputs.asc == 'true' &&",
-        f"      {all_success} &&",
-        "      ((needs.build.result == 'success' && needs.wait-for-build.result == 'success') ||",
-        "       (needs.prepare.outputs.upload_build != 'true' &&",
-        "        needs.build.result == 'skipped' && needs.wait-for-build.result == 'skipped'))",
+        *([f"      {all_success} &&",
+           "      ((needs.build.result == 'success' && needs.wait-for-build.result == 'success') ||",
+           "       (needs.prepare.outputs.upload_build != 'true' &&",
+           "        needs.build.result == 'skipped' && needs.wait-for-build.result == 'skipped'))"]
+          if policy != "when-uploading" else
+          ["      ((needs.prepare.outputs.upload_build == 'true' &&",
+           f"        {all_success} &&",
+           "        needs.build.result == 'success' && needs.wait-for-build.result == 'success') ||",
+           "       (needs.prepare.outputs.upload_build != 'true' && needs.wait-for-build.result == 'skipped'))"]),
         f"    {_uses(repository, 'ios-app-store-connect.yml', sha, version)}",
         "    permissions:",
         "      contents: read",
@@ -300,15 +372,13 @@ def render_ios(config: Config, *, sha: str, version: str, repository: str = DEFA
                 ("tool_sha", "${{ needs.prepare.outputs.tool_sha }}")], config_path),
         *_secrets(ASC_SECRETS),
         "",
+        *(_source_archive_job(repository, sha, version, config_path, release_if, gate_results, needs)
+          if ios.source_archive else []),
         "  github-release:",
-        f"    needs: {needs('prepare', 'build', 'wait-for-build', 'app-store-connect')}",
+        f"    needs: {needs('prepare', 'build', 'wait-for-build', 'app-store-connect', *archive_job)}",
         "    if: >-",
-        "      !cancelled() && github.event_name == 'push' &&",
-        *[f"      needs.{gate}.result == 'success' &&" for gate in gates[:-1]],
-        f"      needs.{gates[-1]}.result == 'success' && needs.prepare.result == 'success' &&",
-        "      (needs.build.result == 'success' || needs.build.result == 'skipped') &&",
-        "      (needs.wait-for-build.result == 'success' || needs.wait-for-build.result == 'skipped') &&",
-        "      (needs.app-store-connect.result == 'success' || needs.app-store-connect.result == 'skipped')",
+        *(release_if[:-1] + [release_if[-1] + " &&", "      needs.source-archive.result == 'success'"]
+          if ios.source_archive else release_if),
         f"    {_uses(repository, 'ios-github-release.yml', sha, version)}",
         "    permissions:",
         "      contents: write",
@@ -398,7 +468,9 @@ def render_android(config: Config, *, sha: str, version: str, app_repository: st
     for job in android.gate_jobs:
         lines += [f"  {job.id}:", "    needs: gates",
                   "    if: needs.gates.outputs.mode == 'release' && needs.gates.outputs.build == 'true'",
-                  f"    uses: {job.uses}", "    permissions:", "      contents: read", ""]
+                  f"    uses: {job.uses}", "    permissions:", "      contents: read", *_gate_inputs(job), ""]
+    keystore_only = android.build.signing == "gradle-properties"
+    keystore_secrets = KEYSTORE_SECRETS[:2] if keystore_only else KEYSTORE_SECRETS
     lines += [
         "  release:",
         "    needs: [" + ", ".join(["gates", *gates]) + "]",
@@ -414,7 +486,8 @@ def render_android(config: Config, *, sha: str, version: str, app_repository: st
         "      id-token: write",
         "      attestations: write",
         "      actions: read",
-        *_with([("gates", f'"{gate_results}"'),
+        *_with([*([("keystore_only", "true")] if keystore_only else []),
+                ("gates", f'"{gate_results}"'),
                 ("mode", "${{ needs.gates.outputs.mode }}"),
                 ("build", "${{ needs.gates.outputs.build }}"),
                 ("github_release", "${{ needs.gates.outputs.github_release }}"),
@@ -425,7 +498,7 @@ def render_android(config: Config, *, sha: str, version: str, app_repository: st
                 ("play_upload", "${{ needs.gates.outputs.play_upload }}"),
                 ("play_tracks", "${{ needs.gates.outputs.play_tracks }}"),
                 ("tool_sha", "${{ needs.gates.outputs.tool_sha }}")], config_path),
-        *_secrets(KEYSTORE_SECRETS + (PLAY_SECRET,)),
+        *_secrets(keystore_secrets + (PLAY_SECRET,)),
         "",
         "  # Validation runs only: a read-only, report-only plan of what a tag run would change.",
         "  store-plan:",

@@ -145,24 +145,25 @@ jobs:
       # stub local workflows, so their local references resolve. This commit is not a release
       # tag's, hence --allow-untagged. actionlint 1.7.12 does not know concurrency.queue yet
       # (documented); drop the ignore once it does.
-      - name: Lint the rendered fud-ai callers
+      - name: Lint every app's rendered callers
         run: |
           set -euo pipefail
-          repo="$RUNNER_TEMP/callers"
-          mkdir -p "$repo/.github/workflows"
-          git -C "$repo" init -q
-          for platform in ios android checks; do
-            case "$platform" in checks) name=store-checks.yml ;; *) name="$platform-release.yml" ;; esac
-            python3 -I -u run.py --app-root examples/fud-ai --config store-release.toml callers render \
-              --platform "$platform" --sha "$GITHUB_SHA" --version 0.1.0 --app-repository apoorvdarshan/fud-ai \
-              --config-in-app store/store-release.toml --allow-untagged --out "$repo/.github/workflows/$name"
+          python3 -I -u scripts/render_examples.py --check
+          for app in examples/*/; do
+            app="$(basename "$app")"
+            [ -d "examples/$app/callers" ] || continue
+            repo="$RUNNER_TEMP/callers-$app"
+            mkdir -p "$repo/.github/workflows"
+            git -C "$repo" init -q
+            cp "examples/$app/callers/"*.yml "$repo/.github/workflows/"
+            # The apps' own gate workflows, as stubs that take the inputs the callers pass.
+            for stub in ios-tests quality ci; do
+              printf 'name: %s\non:\n  workflow_call:\n    inputs:\n      android-release:\n        type: boolean\n        default: false\npermissions:\n  contents: read\njobs:\n  stub:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo stub\n' \
+                "$stub" > "$repo/.github/workflows/$stub.yml"
+            done
+            (cd "$repo" && "$RUNNER_TEMP/actionlint" -color -ignore 'unexpected key "queue" for "concurrency" section')
+            echo "$app: callers lint clean"
           done
-          for stub in ios-tests quality; do
-            printf 'name: %s\non:\n  workflow_call:\npermissions:\n  contents: read\njobs:\n  stub:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo stub\n' \
-              "$stub" > "$repo/.github/workflows/$stub.yml"
-          done
-          cd "$repo"
-          "$RUNNER_TEMP/actionlint" -color -ignore 'unexpected key "queue" for "concurrency" section'
 
   # Advisory, never required: fud-ai's real files through the store checks (without the
   # pin, caller, yanked and artifact steps). Never uploads anything: app listings and

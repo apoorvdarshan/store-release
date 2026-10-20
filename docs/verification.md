@@ -38,6 +38,27 @@ Connect and is distributed by Apple. Before upload, every app and extension bund
 the archive is checked for the bundle id, version and build number, and the archived
 Info.plist for its export compliance answer.
 
+### Scowld's source archive
+
+With `ios.github_release.source_archive` the iOS GitHub Release also carries
+`<slug>-<version>-source.tar.gz`, its `.sha256` and a cosign bundle
+(`.sigstore.json`), made by store-release's `ios-source-archive.yml` from the tagged
+commit. From store-release v0.2.0 on, the signing identity is that reusable workflow,
+called from the app's repository:
+
+```bash
+sha256sum -c scowld-X.Y.Z-source.tar.gz.sha256
+cosign verify-blob scowld-X.Y.Z-source.tar.gz \
+  --bundle scowld-X.Y.Z-source.tar.gz.sigstore.json \
+  --certificate-identity-regexp '^https://github\.com/apoorvdarshan/store-release/\.github/workflows/ios-source-archive\.yml@[0-9a-f]{40}$' \
+  --certificate-github-workflow-repository apoorvdarshan/scowld \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+gh attestation verify scowld-X.Y.Z-source.tar.gz --repo apoorvdarshan/scowld
+```
+
+Releases made by Scowld's own pipeline (v2.1.0 and earlier) keep their old identity,
+Scowld's `.github/workflows/ios-release.yml`.
+
 ## store-release itself
 
 - Apps pin store-release by full commit SHA with a `# vX.Y.Z` comment. In Store

@@ -1,6 +1,9 @@
 """Create or update the tag's GitHub Release with the gh CLI (argv lists, never a shell).
 
-iOS:     title from ios.github_release.title; reviewed notes or generated ones.
+iOS:     title from ios.github_release.title; reviewed notes or generated ones; with
+         ios.github_release.source_archive, the signed source archive's files. An existing
+         release is handled as ios.github_release.on_existing says (update, upload-missing,
+         keep or fail).
 Android: title "Android {version} (versionCode {version_code})" (github-preflight reads
          it), the signed AAB and APK with their Sigstore bundles; a pre-release
          unless the build went to Play production.
@@ -72,26 +75,74 @@ def release_exists(tag: str, repo: str, run: Runner) -> bool:
     return run(["gh", "release", "view", tag, "--repo", repo]).returncode == 0
 
 
-def ios_title(config: Config, app_root: Path, *, version: str, uploaded_build: str) -> str:
+def ios_title(config: Config, app_root: Path, *, version: str, uploaded_build: str, tag: str = "") -> str:
     build = uploaded_build
-    if not build:
+    if not build and "{build}" in config.ios.title:
         # The first line naming CURRENT_PROJECT_VERSION, digits only (`grep -m1 | tr -dc 0-9`).
         pbxproj = (app_root / config.ios.pbxproj).read_text(encoding="utf-8")
         line = next((line for line in pbxproj.splitlines() if "CURRENT_PROJECT_VERSION" in line), "")
         build = "".join(ch for ch in line if ch.isdigit())
-    return render_template(config.ios.title, version=version, build=build)
+    # " (build N)" only when this run uploaded a build (ABYSM's and PCM Notes' titles).
+    suffix = f" (build {uploaded_build})" if uploaded_build else ""
+    return render_template(config.ios.title, version=version, build=build, tag=tag, build_suffix=suffix)
+
+
+SOURCE_ARCHIVE_SUFFIXES = ("", ".sigstore.json", ".sha256")
+
+
+def source_archive_name(config: Config, version: str) -> str:
+    return f"{config.app.slug}-{version}-source.tar.gz"
+
+
+def source_archive_assets(config: Config, version: str, assets_dir: str) -> list[str]:
+    """The signed source archive and its bundle and checksum, in the order Scowld attached them."""
+    if not config.ios.source_archive:
+        return []
+    if not assets_dir:
+        raise GithubError("ios.github_release.source_archive is on, but no --assets-dir holds the archive")
+    base = Path(assets_dir) / source_archive_name(config, version)
+    assets = [str(base) + suffix for suffix in SOURCE_ARCHIVE_SUFFIXES]
+    missing = [Path(a).name for a in assets if not Path(a).is_file()]
+    if missing:
+        raise GithubError(f"the source archive files are missing from {assets_dir}: {', '.join(missing)}")
+    return assets
+
+
+def attached_assets(tag: str, repo: str, run: Runner) -> list[str]:
+    result = run(["gh", "release", "view", tag, "--repo", repo, "--json", "assets", "--jq", ".assets[].name"])
+    if result.returncode != 0:
+        raise GithubError(f"gh release view failed: {(result.stderr or result.stdout).strip()}")
+    return [line for line in (result.stdout or "").splitlines() if line]
 
 
 def ios_release_commands(config: Config, app_root: Path, *, tag: str, version: str, uploaded_build: str,
-                         notes_file: str, repo: str, tags: Sequence[str], exists: bool) -> list[list[str]]:
-    title = ios_title(config, app_root, version=version, uploaded_build=uploaded_build)
+                         notes_file: str, repo: str, tags: Sequence[str], exists: bool, assets: Sequence[str] = (),
+                         attached: Sequence[str] | None = None) -> list[list[str]]:
+    title = ios_title(config, app_root, version=version, uploaded_build=uploaded_build, tag=tag)
     notes = notes_args(notes_file)
-    latest = ["--latest"] if is_highest(tag, config.ios.tag_prefix, tags) else ["--latest=false"]
-    if exists:
+    if config.ios.latest == "always":
+        latest = ["--latest"]
+    else:
+        latest = ["--latest"] if is_highest(tag, config.ios.tag_prefix, tags) else ["--latest=false"]
+    policy = config.ios.on_existing
+    if exists and policy == "update":
         return [["gh", "release", "edit", tag, "--repo", repo, "--title", title, *notes,
                  "--draft=false", "--prerelease=false", *latest]]
+    if exists and policy == "keep":
+        print(f"GitHub Release {tag} already exists; leaving it unchanged")
+        return []
+    if exists and policy == "upload-missing":
+        print(f"GitHub Release {tag} already exists; leaving its notes unchanged")
+        names = set(attached or ())
+        if assets and not all(Path(asset).name in names for asset in assets):
+            # The archive, its signature and its checksum are attached as one set.
+            return [["gh", "release", "upload", tag, "--repo", repo, *assets, "--clobber"]]
+        if assets:
+            print("The signed source archive is already attached")
+        return []
+    # A new release, or on_existing = "fail": gh refuses to create a release that exists.
     return [["gh", "release", "create", tag, "--repo", repo, "--verify-tag", "--title", title,
-             *(notes or ["--generate-notes"]), *latest]]
+             *(notes or ["--generate-notes"]), *latest, *assets]]
 
 
 def android_version_code(config: Config, app_root: Path) -> int:
@@ -118,7 +169,8 @@ def android_release_commands(config: Config, app_root: Path, *, tag: str, produc
     assets = [str(assets_dir / f"{base}{suffix}")
               for suffix in (".aab", ".aab.sigstore.json", ".apk", ".apk.sigstore.json")]
     highest = is_highest(tag, config.android.tag_prefix, tags)
-    if production and highest:
+    if production and (highest or config.android.flow == "verceltics"):
+        # The verceltics flow marked every production release Latest.
         kind = ["--prerelease=false", "--latest"]
     elif production:
         kind = ["--prerelease=false", "--latest=false"]
@@ -126,6 +178,12 @@ def android_release_commands(config: Config, app_root: Path, *, tag: str, produc
         # A pre-release while Android ships only to testing tracks, so the iOS release stays Latest.
         kind = ["--prerelease", "--latest=false"]
     notes = notes_args(notes_file)
+    if exists and config.android.flow == "verceltics":
+        # Verceltics edited the release first, then replaced its assets.
+        return [
+            ["gh", "release", "edit", tag, "--repo", repo, "--verify-tag", *kind, "--title", title, *notes],
+            ["gh", "release", "upload", tag, "--repo", repo, "--clobber", *assets],
+        ]
     if exists:
         return [
             ["gh", "release", "upload", tag, "--repo", repo, "--clobber", *assets],
@@ -166,13 +224,16 @@ def release(config: Config, app_root: Path, *, platform: str, tag: str, notes_fi
         raise GithubError("GITHUB_REPOSITORY is not set")
     tags = release_tags(repo, run)
     exists = release_exists(tag, repo, run)
-    if exists:
+    if exists and (platform == "android" or config.ios is None or config.ios.on_existing == "update"):
         print(f"the GitHub Release for {tag} exists (earlier attempt); updating it")
     if platform == "ios":
         if config.ios is None:
             raise GithubError("no [ios] in store-release.toml")
+        assets = source_archive_assets(config, version, assets_dir)
+        attached = attached_assets(tag, repo, run) if exists and config.ios.on_existing == "upload-missing" else None
         commands = ios_release_commands(config, app_root, tag=tag, version=version, uploaded_build=uploaded_build,
-                                        notes_file=notes_file, repo=repo, tags=tags, exists=exists)
+                                        notes_file=notes_file, repo=repo, tags=tags, exists=exists, assets=assets,
+                                        attached=attached)
     else:
         if config.android is None:
             raise GithubError("no [android] in store-release.toml")

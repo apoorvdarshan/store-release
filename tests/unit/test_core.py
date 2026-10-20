@@ -214,7 +214,7 @@ class ConfigValueTests(unittest.TestCase):
         ("ios.creative.sizes", {"search-results/a.gif": 1}, "takes .png, .jpg, .jpeg files"),
         ("ios.creative.sizes", {"header/a.png": 1, "header/b.png": 2}, "the header slot takes one image"),
         ("ios.products.iap_route", "review-item", "ios.products.iap_route"),
-        ("ios.github_release.title", "iOS {tag}", "unknown placeholder"),
+        ("ios.github_release.title", "iOS {commit}", "unknown placeholder"),
         ("ios.github_release.title", "iOS {version!r}", "unknown placeholder"),
         ("ios.github_release.title", "iOS {version", "not a valid template"),
         ("android.tag_prefix", "Android-v", "android.tag_prefix"),
@@ -436,6 +436,7 @@ FUD_AI_PATHS = {
                   "/shared/workout-vectors/sample-pack.txt", "/shared/workout-vectors/exercise-visual-manifest.json"],
     "ios-wait-for-build": ["/store/store-release.toml"],
     "ios-app-store-connect": ["/store/store-release.toml", "/store/", "/APPSTORE.md"],
+    "ios-source-archive": ["/store/store-release.toml"],
     "ios-github-release": ["/store/store-release.toml", "/RELEASE_NOTES.md",
                            "/ios/calorietracker.xcodeproj/project.pbxproj"],
     "ios-store-plan": ["/store/store-release.toml", "/store/", "/APPSTORE.md",
@@ -918,7 +919,8 @@ class ConfigExportTests(unittest.TestCase):
             "STORE_RELEASE_CONFIG=store/store-release.toml", "STORE_RELEASE_SLUG=fudai", "STORE_RELEASE_APP_NAME=Fud AI", "STORE_RELEASE_IOS_TAG_PREFIX=ios-v",
             "STORE_RELEASE_IOS_BUNDLE_ID=com.apoorvdarshan.calorietracker", "STORE_RELEASE_IOS_TEAM_ID=23RV7FYH36",
             "STORE_RELEASE_IOS_PROJECT=ios/calorietracker.xcodeproj", "STORE_RELEASE_IOS_SCHEME=calorietracker",
-            "STORE_RELEASE_IOS_LOCALE=en-US",
+            "STORE_RELEASE_IOS_LOCALE=en-US", "STORE_RELEASE_IOS_FLOW=fud-ai", "STORE_RELEASE_IOS_VERIFY_IPA=false",
+            "STORE_RELEASE_IOS_SOURCE_ARCHIVE=false",
         ])
         android = quiet(stage.config_export, cfg, "android-publish", environ={})
         self.assertIn("STORE_RELEASE_ANDROID_TASKS=:app:bundleRelease :app:assembleRelease", android)

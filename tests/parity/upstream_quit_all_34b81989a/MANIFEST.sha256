@@ -1,0 +1,8 @@
+# apoorvdarshan/quit-all at 34b81989a8df2aa7c7cd05ee9aaf4b41c114b87e: each file's SHA-256, its name here and its path there.
+6393496a9d7123ff053a609f911a7b7c8c35e130f34d205e4f8025273ee289c9  asc_release.py  scripts/store/asc_release.py
+e4ea71abd972c6b0ea7406d58b6d0124e159104cc35a295c454a1825f89eca2a  ios_release.py  scripts/store/ios_release.py
+5b66380c56f74943b634ac2529e5f57d04f3f28a009c0e543040843b6a9f575c  test_ios_release.py  scripts/store/test_ios_release.py
+59f279087d85b918be19b0f7a613213604ce97a7a9d337cc45d842e757c226da  redact_logs.py  scripts/store/redact_logs.py
+eaae7e74a037b00042d2fcc8d9c7dc7af25b7d27cac453f47cfe7d49f7dade3e  print_gates.py  scripts/store/print_gates.py
+a7c49bd9ab39ce20ca1ac912c30fc81b44142aa6fc379227f4c5fe3c17f433c4  release_notes.py  scripts/release_notes.py
+a5d140d8598d357d567c9c7cf55efce3ec0b6dc4f891e23f09c468d2fa8a3282  verify_ios_bundles.sh  scripts/store/verify_ios_bundles.sh
