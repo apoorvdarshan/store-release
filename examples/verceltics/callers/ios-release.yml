@@ -18,7 +18,7 @@ on:
     inputs:
       marketing_version:
         description: >-
-          Validation only: version to validate as (e.g. 7.2). Empty = the project
+          Validation only: version to validate as (e.g. 1.2). Empty = the project
           version. Apple rejects versions already approved, so use the next one.
         required: false
         default: ""
