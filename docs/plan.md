@@ -73,7 +73,7 @@ tests assert that the transport saw only GETs.
 Fud AI's current switches, with an illustrative App Store Connect state:
 
 ```
-store-plan ios: Fud AI 7.2 (tag ios-v7.2), store-release v0.1.0 (<sha>)
+store-plan ios: Fud AI 7.2 (tag ios-v7.2), store-release v0.2.0 (<sha>)
 switches a tag run would use: master=on create_version=on upload_build=on listing=off whats_new=off screenshots=off creative=off submit=off public_release=off
 1. create-version: App Store version 7.2 is missing → WOULD CREATE (POST /appStoreVersions)
    refusal checks passed: 7.1.2 READY_FOR_SALE; 7.2 is newer than every version

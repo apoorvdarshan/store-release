@@ -8,6 +8,8 @@ or `config-breaking`.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-21
+
 Impact: release-path
 
 The other five apps' pipelines: Scowld, Verceltics (iOS and Android), ABYSM, PCM
@@ -43,12 +45,43 @@ config and rendered callers do not change.
 - `ios pr-checks` for ABYSM checks the committed project's export compliance first, as
   its pull request tests did; its config names `ios.info_plist`, so prepare and the store
   checks check that Info.plist out.
+- Atheris fuzz targets (`fuzz/`) for the config loader, the PNG checks, the redactor,
+  release notes and the switches, run by `fuzz.yml`.
+- store-release's own releases ship the commit's source archive with its SHA-256, a
+  Sigstore keyless signature bundle and a SLSA build provenance attestation
+  (`release.yml`; verify commands in its header).
+
+### Fixed
+
+- certifi 2026.10.19 in `requirements.txt` (Dependabot alert #1: it shipped emSign root
+  certificates whose intermediate keys were compromised).
 
 ### App actions required
 
-None for Fud AI. Each of the other apps moves in its own pull request
-([examples/MIGRATING.md](examples/MIGRATING.md)); until then it keeps its own
-pipeline.
+None for Fud AI, which stays on v0.1.0 until it bumps its pin. Each of the other apps
+moves in its own pull request ([examples/MIGRATING.md](examples/MIGRATING.md)); until
+then it keeps its own pipeline. No switch, secret or variable changes.
+
+### Verification
+
+- CI on `main` at `3df2938902969b1ef2b2dc5d865c490fdbc98c02`, the code this release
+  tags (the release commit changes only this file, `__version__`, the version in the
+  README, `docs/plan.md` and the examples' rendered comments, and two tests that now
+  read `__version__`):
+  [CI 39505133218](https://github.com/apoorvdarshan/store-release/actions/runs/39505133218)
+  (`test (stdlib)`, `test (strict)`, `test (macos)`, `lint`, `workflows`, and the
+  advisory `canary (fud-ai)`) and
+  [CodeQL 39505133135](https://github.com/apoorvdarshan/store-release/actions/runs/39505133135)
+  (`Analyze (python)`, `Analyze (actions)`). `release.yml` checks the required ones
+  again on the release commit.
+- The five apps' prepare gates and store checks ran on each app's real tree at its flow
+  commit, cut down to each job's sparse checkout (PR #16, which fixed ABYSM's).
+- Re-run probe: not run again. `probe-rerun.yml` and `probe-inner.yml` are unchanged
+  since the v0.1.0 results ([docs/rerun.md](docs/rerun.md#results)), and the new jobs
+  are called the same way.
+- No app validation dispatches yet: they are step 4 of each app's migration pull request
+  ([examples/MIGRATING.md](examples/MIGRATING.md)). A defect they find ships as v0.2.1
+  (tags never move).
 
 ## [0.1.0] - 2026-10-20
 
@@ -133,5 +166,6 @@ No switch, secret or variable changes.
   migration PR, the next phase; they have not run yet. A defect they find ships as
   v0.1.1 (tags never move).
 
-[Unreleased]: https://github.com/apoorvdarshan/store-release/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/apoorvdarshan/store-release/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/apoorvdarshan/store-release/releases/tag/v0.2.0
 [0.1.0]: https://github.com/apoorvdarshan/store-release/releases/tag/v0.1.0

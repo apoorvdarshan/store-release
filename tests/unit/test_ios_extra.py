@@ -429,7 +429,7 @@ class StorePlanTests(unittest.TestCase):
         code, out, result = self.plan({"IOS_CREATE_VERSION": "true", "IOS_UPLOAD_BUILD": "true"}, fake)
         self.assertEqual(code, 0)
         lines = out.splitlines()
-        self.assertEqual(lines[0], "store-plan ios: Fud AI 7.2 (tag ios-v7.2), store-release v0.1.0")
+        self.assertEqual(lines[0], f"store-plan ios: Fud AI 7.2 (tag ios-v7.2), store-release v{__version__}")
         self.assertEqual(lines[1], "switches a tag run would use: master=on create_version=on upload_build=on "
                                    "listing=off whats_new=off screenshots=off creative=off submit=off public_release=off")
         self.assertIn("1. create-version: App Store version 7.2 is missing → WOULD CREATE (POST /appStoreVersions)", lines)
