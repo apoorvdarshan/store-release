@@ -60,7 +60,7 @@ python3 -I -u path/to/store-release/run.py --app-root . config check --files
 | `app.name` | str | required | 1–64 printable characters; used in messages (`this publisher only supports the <name> iOS bundle ...`) |
 | `app.slug` | str | required | `^[a-z0-9][a-z0-9-]{0,31}$`; temp names `<slug>.xcarchive`, `<slug>-signing.keychain-db`, `<slug>-release.jks`, `<slug>-keystore.properties` |
 | `release_notes.path` | path | `RELEASE_NOTES.md` | `## <exact tag>` sections become the GitHub Release body; a missing file or section means generated notes; an empty or duplicated section, or the tag `Unreleased`, fails |
-| `release_notes.unique_headings` | bool | `true` | Store checks fail when any `## ` heading appears twice, not only the tag being released (Scowld, Verceltics and PCM Notes never checked that: `false`) |
+| `release_notes.unique_headings` | bool | `true` | Store checks fail when any `## ` heading appears twice, not only the tag being released (Verceltics and PCM Notes never checked that: `false`) |
 | `catalog.path` | path | required in the table | the product catalog JSON |
 | `catalog.groups` | list[str] | required | non-empty, unique, `^[A-Za-z_]+$`; each must be a list in the catalog. Only these ids are ever attached to App Review |
 | `catalog.id_prefix` | str | required | every App Store product id starts with it |

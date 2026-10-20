@@ -9,8 +9,6 @@ slug = "scowld"
 
 [release_notes]
 path = "RELEASE_NOTES.md"
-# Only the tag being released must have one section; other duplicate headings never failed a check.
-unique_headings = false
 
 [checks]
 paths = [

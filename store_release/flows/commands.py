@@ -337,6 +337,14 @@ def ios_pr_checks(config: Config, flow: str, args: list[str]) -> int:
             call_asc(flow, ["--dry-run"])
         return 0
     if flow == "abysm":
+        # ABYSM's pull request tests (run before its dry-run) checked the committed project's
+        # export compliance: its command-line check, and that the app declares no non-exempt
+        # encryption.
+        release = module(flow, "ios_release")
+        release.main(["export-compliance"])
+        if release.check_export_compliance() != "NO":
+            print("error: ABYSM's pull request checks require ITSAppUsesNonExemptEncryption = NO", file=sys.stderr)
+            return 1
         with environment({**off, "UPLOAD_LISTING": "true", "UPLOAD_SCREENSHOTS": "true",
                           "UPLOAD_CREATIVE_ASSETS": "true", "SUBMIT_IOS_REVIEW": "true", "PUBLIC_RELEASE": "false"}):
             call_asc(flow, ["--dry-run", "--build-id", "DRY-RUN", "--build-number", "1"])
