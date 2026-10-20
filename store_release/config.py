@@ -236,7 +236,7 @@ class Config:
     ios: Ios | None
     android: Android | None
     # Store checks fail when any `## ` heading of the release notes appears twice (not only
-    # the tag being released). Scowld, Verceltics and PCM Notes never checked that.
+    # the tag being released). Verceltics and PCM Notes never checked that.
     unique_headings: bool = True
 
     @property

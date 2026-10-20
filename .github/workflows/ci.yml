@@ -156,6 +156,10 @@ jobs:
             mkdir -p "$repo/.github/workflows"
             git -C "$repo" init -q
             cp "examples/$app/callers/"*.yml "$repo/.github/workflows/"
+            # Workflows an app adds with its migration (examples/<app>/app-files).
+            if [ -d "examples/$app/app-files/.github/workflows" ]; then
+              cp "examples/$app/app-files/.github/workflows/"*.yml "$repo/.github/workflows/"
+            fi
             # The apps' own gate workflows, as stubs that take the inputs the callers pass.
             for stub in ios-tests quality ci; do
               printf 'name: %s\non:\n  workflow_call:\n    inputs:\n      android-release:\n        type: boolean\n        default: false\npermissions:\n  contents: read\njobs:\n  stub:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo stub\n' \

@@ -39,6 +39,9 @@ team_id = "23RV7FYH36"
 project = "Abysm.xcodeproj"
 scheme = "Abysm"
 app_target = "Abysm"
+# The app target's INFOPLIST_FILE: the flow's export compliance check reads it (prepare,
+# store checks), so those jobs check it out.
+info_plist = "Abysm/Info.plist"
 locale = "en-US"
 gate_jobs = [
   { id = "quality", uses = "./.github/workflows/ios-tests.yml" },

@@ -8,6 +8,7 @@ import io
 import os
 import plistlib
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -209,7 +210,7 @@ class FlowConfigTests(unittest.TestCase):
         self.assertEqual(verceltics.android.gate_jobs[0].inputs, (("android-release", True),))
         self.assertFalse(verceltics.android.pad_to_9_16)
         self.assertEqual(abysm.ios.gate_jobs[0].id, "quality")
-        self.assertFalse(scowld.unique_headings)
+        self.assertTrue(scowld.unique_headings)
         self.assertTrue(abysm.unique_headings)
 
     def test_a_flow_rejects_what_it_does_not_do(self) -> None:
@@ -526,6 +527,17 @@ class RedactUnionTests(unittest.TestCase):
             self.assertFalse((folder / "link").exists())
 
 
+def sparse_copy(tree: Path, patterns: list[str], dest: Path) -> Path:
+    """The files of tree a job's sparse checkout (non-cone: /file and /dir/ patterns) gives it."""
+    for path in sorted(tree.rglob("*")):
+        rel = "/" + path.relative_to(tree).as_posix()
+        if path.is_file() and any(rel == p or (p.endswith("/") and rel.startswith(p)) for p in patterns):
+            target = dest / rel[1:]
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(path, target)
+    return dest
+
+
 class FlowPathsTests(unittest.TestCase):
     def test_flow_jobs_check_out_what_the_flow_reads(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -545,6 +557,90 @@ class FlowPathsTests(unittest.TestCase):
                         self.assertIn(f"/{hook}", build)
                     self.assertEqual(paths.patterns(cfg, "ios-source-archive", config_path="store/store-release.toml",
                                                     environ=env), ["/store/store-release.toml"])
+
+    def test_prepare_gates_and_store_checks_run_on_their_sparse_checkout(self) -> None:
+        # A run that builds checks export compliance in prepare; ABYSM's check reads the
+        # Info.plist its project names (ios.info_plist), which the checkout must include.
+        from store_release import paths  # noqa: PLC0415
+
+        env = {"GITHUB_WORKFLOW_REF": "o/r/.github/workflows/ios-release.yml@refs/heads/main", "GITHUB_REPOSITORY": "o/r"}
+        with tempfile.TemporaryDirectory() as tmp:
+            for app in APPS:
+                full = trees.build_tree(app, Path(tmp) / app / "full")
+                cfg = config.load_for_app(full)
+                jobs = [("ios-prepare", ("ios", "gates"), {"GITHUB_EVENT_NAME": "workflow_dispatch",
+                                                           "GITHUB_REF_NAME": "main"})]
+                if app == "abysm":
+                    jobs.append(("checks", ("ios", "export-compliance"), {}))
+                for job, args, extra in jobs:
+                    with self.subTest(app=app, job=job):
+                        patterns = paths.patterns(cfg, job, config_path="store/store-release.toml", environ=env)
+                        sparse = sparse_copy(full, patterns, Path(tmp) / app / job)
+                        out = Path(tmp) / app / f"{job}.out"
+                        result = clirun.run(sparse, *args, env=clirun.clean_env(GITHUB_OUTPUT=str(out), **extra))
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        if job == "ios-prepare":
+                            self.assertEqual(clirun.outputs(out)["build"], "true")
+                            if app == "abysm":
+                                self.assertIn("ITSAppUsesNonExemptEncryption = NO", result.stdout)
+
+
+class AbysmPrChecksTests(unittest.TestCase):
+    """ABYSM's pull requests checked the committed project's export compliance (its PR tests)."""
+
+    def test_pr_checks_fail_when_the_app_drops_its_export_compliance_answer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = trees.build_tree("abysm", Path(tmp) / "abysm")
+            plist = tree / "Abysm" / "Info.plist"
+            # The synthetic tree has no screenshots, so with the answer in place the run goes on
+            # to the store files' dry-run, which then stops on the missing screenshots.
+            for value in (None, True, False):
+                data = plistlib.loads(plist.read_bytes())
+                data.pop("ITSAppUsesNonExemptEncryption", None)
+                if value is not None:
+                    data["ITSAppUsesNonExemptEncryption"] = value
+                    data["ITSEncryptionExportComplianceCode"] = "ABC123" if value else ""
+                    if not value:
+                        del data["ITSEncryptionExportComplianceCode"]
+                plist.write_bytes(plistlib.dumps(data))
+                with self.subTest(value=value):
+                    result = clirun.run(tree, "ios", "pr-checks")
+                    self.assertEqual(result.returncode, 1, result.stderr)
+                    if value is False:
+                        self.assertIn("ITSAppUsesNonExemptEncryption = NO", result.stdout)
+                        self.assertIn("has no PNG screenshots", result.stderr)
+                    if value is None:
+                        self.assertIn("does not declare export compliance", result.stderr)
+                    if value is True:
+                        self.assertIn("require ITSAppUsesNonExemptEncryption = NO", result.stderr)
+
+
+class AbysmTestScriptTests(unittest.TestCase):
+    """ABYSM's tests of scripts/test-ios.sh move to the app unchanged (examples/abysm/app-files)."""
+
+    APP_FILES = TOOL_ROOT / "examples" / "abysm" / "app-files"
+    TESTS = APP_FILES / "scripts" / "ci" / "test_test_ios.py"
+
+    def test_the_app_file_holds_the_apps_tests_unchanged(self) -> None:
+        upstream = (upstream_dir("abysm") / "test_ios_release.py").read_text(encoding="utf-8")
+        moved = upstream[upstream.index("# Stand-ins for `xcrun simctl`"):upstream.index("class WorkflowWiringTests")]
+        self.assertIn(moved.rstrip() + "\n", self.TESTS.read_text(encoding="utf-8"))
+
+    def test_they_pass_against_the_apps_script(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ci = Path(tmp) / "scripts" / "ci"
+            ci.mkdir(parents=True)
+            shutil.copyfile(upstream_dir("abysm") / "test-ios.sh", Path(tmp) / "scripts" / "test-ios.sh")
+            shutil.copyfile(self.TESTS, ci / "test_test_ios.py")
+            result = subprocess.run([sys.executable, "-m", "unittest", "-v", "scripts/ci/test_test_ios.py"], cwd=tmp,
+                                    capture_output=True, text=True, timeout=300, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Ran 5 tests", result.stderr)
+
+    def test_the_workflow_runs_them_when_the_script_changes(self) -> None:
+        text = (self.APP_FILES / ".github" / "workflows" / "test-ios-script.yml").read_text(encoding="utf-8")
+        self.assertEqual(text.count("- 'scripts/test-ios.sh'"), 2)
+        self.assertIn("run: python3 -m unittest -v scripts/ci/test_test_ios.py", text)
 
 
 if __name__ == "__main__":

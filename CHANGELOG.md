@@ -35,7 +35,14 @@ config and rendered callers do not change.
   `keystore_only` input of `android-publish.yml`, `ios verify-bundles`, the
   `pre_archive`/`post_archive`/`prepare` hook stages, file names in the redactor.
 - `examples/{scowld,verceltics,abysm,pcm-notes,quit-all}/` with rendered callers and
-  [MIGRATING.md](examples/MIGRATING.md); CI lints every example's callers.
+  [MIGRATING.md](examples/MIGRATING.md); CI lints every example's callers and the
+  workflows in its `app-files/`.
+- `examples/abysm/app-files/`: ABYSM's tests of `scripts/test-ios.sh`, moved unchanged
+  from its store tests to `scripts/ci/test_test_ios.py`, and `test-ios-script.yml`,
+  which runs them on pull requests that touch the script.
+- `ios pr-checks` for ABYSM checks the committed project's export compliance first, as
+  its pull request tests did; its config names `ios.info_plist`, so prepare and the store
+  checks check that Info.plist out.
 
 ### App actions required
 

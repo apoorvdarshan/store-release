@@ -1,0 +1,47 @@
+name: Test script checks
+
+# scripts/test-ios.sh shuts the simulator down, and confirms it is shut down, between
+# the unit and UI tests: tested against a fake xcrun (no simulator, no app build). These
+# tests ran in store-checks.yml from scripts/store until the store tooling moved to
+# store-release; they now live in scripts/ci/test_test_ios.py. A newer push to a pull
+# request cancels its older run; pushes to main and manual runs are never cancelled.
+on:
+  pull_request:
+    paths:
+      - 'scripts/test-ios.sh'
+      - 'scripts/ci/test_test_ios.py'
+      - '.github/workflows/test-ios-script.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/test-ios.sh'
+      - 'scripts/ci/test_test_ios.py'
+      - '.github/workflows/test-ios-script.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-ios-script-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test-ios-script:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /scripts/test-ios.sh
+            /scripts/ci/
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Test the simulator shutdown between the unit and UI tests (fake xcrun)
+        run: python3 -m unittest -v scripts/ci/test_test_ios.py
