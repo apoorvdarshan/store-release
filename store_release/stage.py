@@ -76,6 +76,11 @@ WORD = re.compile(r"[A-Za-z0-9_.-]+")
 SDK_PACKAGES = re.compile(r"([A-Za-z0-9_.;-]+( [A-Za-z0-9_.;-]+)*)?")
 
 
+# The optional per-switch tables (store_release.context.tables), in the order they are exported.
+OPTIONAL_TABLES = ("ios.listing", "ios.whats_new", "ios.screenshots", "ios.creative", "ios.products",
+                   "android.listing", "android.whats_new", "android.screenshots")
+
+
 def export_values(config: Config, job: str, config_path: str = config_mod.DEFAULT_CONFIG
                   ) -> list[tuple[str, str, re.Pattern]]:
     values = [
@@ -97,6 +102,13 @@ def export_values(config: Config, job: str, config_path: str = config_mod.DEFAUL
             ("STORE_RELEASE_PORTED_FLOW", "true" if config.ported_flow else "false", BOOLEAN),
             ("STORE_RELEASE_UNIQUE_HEADINGS", "true" if config.unique_headings else "false", BOOLEAN),
         ]
+        # The store checks dry-run each store step only for the tables the config has, so an app
+        # without a listing, screenshots or products passes them (Store checks only).
+        from store_release.context import tables  # noqa: PLC0415 - context imports every module
+
+        present = tables(config)
+        values += [(f"STORE_RELEASE_HAS_{name.upper().replace('.', '_')}", "true" if name in present else "false",
+                    BOOLEAN) for name in OPTIONAL_TABLES]
     if want_ios and config.ios is not None:
         ios = config.ios
         values += [
@@ -196,7 +208,7 @@ def gate_check(raw: str, configured: list[str], *, release: bool, skipped_ok: bo
     """The gate jobs' results this stage may run after (the caller's `if:`, checked again).
 
     skipped_ok: ios.gate_policy = "when-uploading", on a tag run that uploads no build: the
-    gate jobs did not run (PCM Notes' caller), so all of them must be skipped.
+    gate jobs did not run, so all of them must be skipped.
     """
     results = parse_gates(raw)
     if sorted(results) != sorted(configured) or len(results) != len(configured):
@@ -276,7 +288,7 @@ def stage_check(stage: str, args: argparse.Namespace, config: Config, *,
 
 
 def _project_version(config: Config | None = None) -> str:
-    if config is not None and config.ios is not None and config.ios.flow != "fud-ai":
+    if config is not None and config.ios is not None and config.ios.flow != config_mod.STANDARD_FLOW:
         from store_release.flows import commands  # noqa: PLC0415
 
         release = commands.module(config.ios.flow, "ios_release")

@@ -119,8 +119,8 @@ jobs:
       # New, release notes and log redaction behave as the store steps expect.
       - name: Test the store release tooling (offline)
         run: python3 -I -u .store-release/run.py selftest --platform ios
-      # What the config pins about the app's own files, on every run (fud-ai's unit tests
-      # checked these in the real files here): ios.export_compliance and ios.creative.sizes.
+      # What the config pins about the app's own files, on every run: ios.export_compliance
+      # and ios.creative.sizes.
       - name: Check the app files the config pins
         run: python3 -I -u .store-release/run.py --app-root app config check --pinned
       # A pin the release tag does not point at is only a warning here (Store checks fail on it).
@@ -138,12 +138,12 @@ jobs:
         run: python3 -I -u .store-release/run.py yanked check --warn-only
       # The app's own prepare checks (ios.prepare.checks), with no secret in the environment.
       - name: Run the app's prepare checks
-        if: env.STORE_RELEASE_IOS_FLOW != 'fud-ai'
+        if: env.STORE_RELEASE_IOS_FLOW != 'standard'
         run: python3 -I -u .store-release/run.py --app-root app hooks run --stage prepare
       # A tag without a release notes section is fine (GitHub generates the notes);
       # an empty or duplicated section is not.
       - name: Check release notes, IAP catalog and RevenueCat gate
-        if: github.event_name == 'push' && env.STORE_RELEASE_IOS_FLOW == 'fud-ai'
+        if: github.event_name == 'push' && env.STORE_RELEASE_IOS_FLOW == 'standard'
         env:
           STORE_SYNC_REVENUECAT: ${{ vars.STORE_SYNC_REVENUECAT }}
         run: |
@@ -154,7 +154,7 @@ jobs:
       # A ported flow: its release notes check (tag runs) and its own catalog check, run when
       # that app's prepare ran it (store_release.flows.commands.catalog_check).
       - name: Check release notes and the IAP catalog (ported flow)
-        if: env.STORE_RELEASE_IOS_FLOW != 'fud-ai'
+        if: env.STORE_RELEASE_IOS_FLOW != 'standard'
         run: |
           set -euo pipefail
           if [ "$GITHUB_EVENT_NAME" = push ]; then
@@ -188,15 +188,15 @@ jobs:
         run: python3 -I -u .store-release/run.py --app-root app secrets check APP_STORE_CONNECT_API_KEY_ID APP_STORE_CONNECT_ISSUER_ID APP_STORE_CONNECT_API_KEY_P8
       # Fail before building when switched-on text would not fit the store.
       - name: Check listing text
-        if: steps.gates.outputs.listing == 'true' && env.STORE_RELEASE_IOS_FLOW == 'fud-ai'
+        if: steps.gates.outputs.listing == 'true' && env.STORE_RELEASE_IOS_FLOW == 'standard'
         run: python3 -I -u .store-release/run.py --app-root app listing prepare --platform ios --out "$RUNNER_TEMP/listing-check"
       - name: Check What's New
-        if: steps.gates.outputs.whats_new == 'true' && env.STORE_RELEASE_IOS_FLOW == 'fud-ai'
+        if: steps.gates.outputs.whats_new == 'true' && env.STORE_RELEASE_IOS_FLOW == 'standard'
         run: python3 -I -u .store-release/run.py --app-root app whats-new prepare --platform ios --tag "$GITHUB_REF_NAME" --out "$RUNNER_TEMP/whats-new-check"
       # Local files only: sizes, formats, alpha and well-formed files. Their Asset
       # Library state is checked by the version check below.
       - name: Check header and search results images
-        if: steps.gates.outputs.creative == 'true' && env.STORE_RELEASE_IOS_FLOW == 'fud-ai'
+        if: steps.gates.outputs.creative == 'true' && env.STORE_RELEASE_IOS_FLOW == 'standard'
         env:
           UPLOAD_CREATIVE_ASSETS: "true"
         run: python3 -I -u .store-release/run.py --app-root app ios store-step --dry-run
@@ -209,7 +209,7 @@ jobs:
       # "--dry-run" step: listing limits, What's New, RGB screenshot copies, header and search
       # results images), after the tooling install because staging may need Pillow.
       - name: Check the store files the enabled switches use (ported flow, offline)
-        if: env.STORE_RELEASE_IOS_FLOW != 'fud-ai'
+        if: env.STORE_RELEASE_IOS_FLOW != 'standard'
         env:
           GATES_ASC: ${{ steps.gates.outputs.asc }}
           UPLOAD_LISTING: ${{ steps.gates.outputs.listing }}
@@ -236,7 +236,7 @@ jobs:
       # missing or already in review, when a READY_FOR_REVIEW version has no usable
       # draft, or when the header / search results images cannot go on it now.
       - name: Check the App Store version (read-only)
-        if: steps.gates.outputs.asc == 'true' && env.STORE_RELEASE_IOS_FLOW == 'fud-ai'
+        if: steps.gates.outputs.asc == 'true' && env.STORE_RELEASE_IOS_FLOW == 'standard'
         env:
           APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
           APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
@@ -251,7 +251,7 @@ jobs:
       # A ported flow's read-only preflight (GET requests only): what that app checked in
       # App Store Connect before building.
       - name: Check App Store Connect before building (ported flow, read-only)
-        if: steps.gates.outputs.asc == 'true' && env.STORE_RELEASE_IOS_FLOW != 'fud-ai'
+        if: steps.gates.outputs.asc == 'true' && env.STORE_RELEASE_IOS_FLOW != 'standard'
         env:
           APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
           APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}

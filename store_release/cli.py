@@ -17,13 +17,15 @@ from pathlib import Path
 from typing import Iterator
 
 from store_release import __version__
-from store_release.config import DEFAULT_CONFIG, Config, ConfigError
+from store_release.config import DEFAULT_CONFIG, STANDARD_FLOW, Config, ConfigError
 
 TOOL_ROOT = Path(__file__).resolve().parents[1]
 
 USAGE = """usage: run.py [--app-root DIR] [--config PATH] <command> [args...]
 
 commands:
+  init               scaffold store/store-release.toml and the caller workflows for a new app
+                     (see init --help)
   selftest           run store-release's own tests (see selftest --help)
   tool check         the tooling checkout is this workflow's commit
   config check       load and validate the app's store-release.toml (--files: every named file exists
@@ -125,11 +127,11 @@ class App:
     def flow_app(self) -> bool:
         """True when a platform of this config runs a ported flow (store_release.flows)."""
         ios, android = self.config.ios, self.config.android
-        return (ios is not None and ios.flow != "fud-ai") or (android is not None and android.flow != "fud-ai")
+        return (ios is not None and ios.flow != STANDARD_FLOW) or (android is not None and android.flow != STANDARD_FLOW)
 
     @property
     def flow_names(self) -> str:
-        names = {p.flow for p in (self.config.ios, self.config.android) if p is not None and p.flow != "fud-ai"}
+        names = {p.flow for p in (self.config.ios, self.config.android) if p is not None and p.flow != STANDARD_FLOW}
         return ", ".join(sorted(names))
 
     def need(self, platform: str) -> None:
@@ -156,9 +158,34 @@ def option_value(args: list[str], name: str) -> str | None:
     return None
 
 
-def replace_platform(args: list[str], app: App) -> list[str]:
+# The config table (as the Ios / Android field) each platform needs for listing, whats-new and screenshots.
+STEP_TABLES = {"listing": ("listing", "listing"), "whats-new": ("whats_new", "whats_new"),
+               "screenshots": ("screenshot_sets", "screenshots_dir")}
+STEP_TABLE_NAMES = {"listing": "[ios.listing] or [android.listing]",
+                    "whats-new": "[ios.whats_new] or [android.whats_new]",
+                    "screenshots": "[[ios.screenshots.sets]] or [android.screenshots]"}
+
+
+def narrow_to_tables(platform: str, app: App, command: str) -> str | None:
+    """The app's platforms (all, ios or play) narrowed to those with the command's table, for --platform all:
+    an app without [ios.whats_new] has no iOS What's New to prepare. None when no platform has it."""
+    ios_field, android_field = STEP_TABLES[command]
+    have = {"ios": app.config.ios is not None and getattr(app.config.ios, ios_field) is not None,
+            "play": app.config.android is not None and getattr(app.config.android, android_field) is not None}
+    wanted = [name for name in ("ios", "play") if platform in ("all", name) and have[name]]
+    if not wanted:
+        return None
+    return "all" if len(wanted) == 2 else wanted[0]
+
+
+def replace_platform(args: list[str], app: App, command: str = "") -> list[str] | None:
     requested = option_value(args, "--platform") or "all"
     platform = app.text_platform(requested)
+    if requested == "all":
+        narrowed = narrow_to_tables(platform, app, command)
+        if narrowed is None:
+            return None
+        platform = narrowed
     out = []
     skip = False
     for i, arg in enumerate(args):
@@ -229,6 +256,10 @@ def run(argv: list[str]) -> int:
         from store_release import redact  # noqa: PLC0415
 
         return redact.main(["ios redact-logs", *rest[1:]])
+    if command == "init":
+        from store_release import scaffold  # noqa: PLC0415
+
+        return scaffold.main(app_root, rest, config_path=config_path)
     if command == "callers":
         sub, args = two_words(command, rest, ("render",))
         from store_release import callers  # noqa: PLC0415
@@ -321,7 +352,7 @@ def run(argv: list[str]) -> int:
 
             return commands.catalog_check(app.config, args)
         if args:
-            raise UsageError("catalog check takes no arguments for the fud-ai flow")
+            raise UsageError("catalog check takes no arguments for the standard flow")
         from store_release import catalog  # noqa: PLC0415
 
         catalog.check()
@@ -340,13 +371,17 @@ def run(argv: list[str]) -> int:
         return 0
     if command in ("listing", "whats-new", "screenshots"):
         if app.flow_app:
-            raise UsageError(f"`{command}` is the fud-ai flow's step; the {app.flow_names} flow reads its "
+            raise UsageError(f"`{command}` is the standard flow's step; the {app.flow_names} flow reads its "
                              "store files itself (ios check-inputs, ios store-step)")
         verb = {"listing": "prepare", "whats-new": "prepare", "screenshots": "stage"}[command]
         sub, args = two_words(command, rest, (verb,))
         if option_value(args, "--out") is None:
             raise UsageError(f"{command} {verb} needs --out DIR (under $RUNNER_TEMP, never the app checkout)")
-        args = replace_platform(args, app)
+        narrowed = replace_platform(args, app, command)
+        if narrowed is None:
+            print(f"{command} {verb}: the config has no {STEP_TABLE_NAMES[command]}; nothing to do")
+            return 0
+        args = narrowed
         if command == "listing":
             from store_release.text import listing as module  # noqa: PLC0415
         elif command == "whats-new":
@@ -429,14 +464,14 @@ def ios_command(app: App, rest: list[str]) -> int:
     if not rest:
         raise UsageError("ios needs a command")
     sub, args = rest[0], rest[1:]
-    if app.config.ios.flow != "fud-ai" and sub in FLOW_IOS_COMMANDS:
+    if app.config.ios.flow != STANDARD_FLOW and sub in FLOW_IOS_COMMANDS:
         from store_release.flows import commands  # noqa: PLC0415
 
         return commands.ios(app.config, sub, args)
-    if app.config.ios.flow != "fud-ai" and sub == "version-preflight":
+    if app.config.ios.flow != STANDARD_FLOW and sub == "version-preflight":
         raise UsageError(f"the {app.config.ios.flow} flow runs `ios preflight`, not version-preflight")
-    if app.config.ios.flow == "fud-ai" and sub in ("check-inputs", "preflight", "export-listing", "pr-checks"):
-        raise UsageError(f"`ios {sub}` is a ported flow's command; the fud-ai flow does not have it")
+    if app.config.ios.flow == STANDARD_FLOW and sub in ("check-inputs", "preflight", "export-listing", "pr-checks"):
+        raise UsageError(f"`ios {sub}` is a ported flow's command; the standard flow does not have it")
     if sub in IOS_RELEASE_COMMANDS:
         from store_release.ios import release  # noqa: PLC0415
 
@@ -457,7 +492,7 @@ def ios_command(app: App, rest: list[str]) -> int:
                      config=app.config)
         return 0
     if sub == "plan":
-        if app.config.ios.flow != "fud-ai":
+        if app.config.ios.flow != STANDARD_FLOW:
             return flow_plan(app, "ios", args)
         from store_release.ios import plan  # noqa: PLC0415
 
@@ -485,7 +520,7 @@ def android_command(app: App, rest: list[str]) -> int:
     if not rest:
         raise UsageError("android needs a command")
     sub, args = rest[0], rest[1:]
-    if app.config.android.flow != "fud-ai" and sub not in ("plan",):
+    if app.config.android.flow != STANDARD_FLOW and sub not in ("plan",):
         from store_release.flows import commands  # noqa: PLC0415
 
         return commands.android(app.config, sub, args)
@@ -501,7 +536,7 @@ def android_command(app: App, rest: list[str]) -> int:
             play_listing.main()
         return 0
     if sub == "plan":
-        if app.config.android.flow != "fud-ai":
+        if app.config.android.flow != STANDARD_FLOW:
             return flow_plan(app, "android", args)
         from store_release.android import plan  # noqa: PLC0415
 

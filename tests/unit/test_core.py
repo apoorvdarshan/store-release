@@ -191,6 +191,9 @@ class ConfigValueTests(unittest.TestCase):
         ("ios.build.checkout", ["/ios/ "], "ios.build.checkout[0]"),
         ("ios.build.package_cache_files", ["/abs/Package.resolved"], "ios.build.package_cache_files[0]"),
         ("ios.build.pre_archive", ["scripts/ci/hook.rb"], "ios.build.pre_archive[0]"),
+        ("ios.build.runner", "macos 26", "ios.build.runner"),
+        ("ios.build.runner", "", "ios.build.runner"),
+        ("ios.build.runner", 26, "ios.build.runner"),
         ("ios.listing.source", "files", "ios.listing.source"),
         ("ios.whats_new.source", "release-notes", "ios.whats_new.source"),
         ("ios.whats_new.heading", "", "ios.whats_new.heading"),
@@ -254,6 +257,34 @@ class ConfigValueTests(unittest.TestCase):
             with self.subTest(table=table), self.assertRaisesRegex(config.ConfigError, "bogus: unknown key"):
                 config.parse(data)
 
+    def test_the_standard_flow_and_its_old_name(self) -> None:
+        cfg = config.parse(fud_ai_data())
+        self.assertEqual((cfg.ios.flow, cfg.android.flow, cfg.ported_flow), ("standard", "standard", False))
+        for value in ("standard", "fud-ai"):
+            data = fud_ai_data()
+            data["ios"]["flow"] = value
+            data["android"]["flow"] = value
+            cfg = config.parse(data)
+            with self.subTest(flow=value):
+                self.assertEqual((cfg.ios.flow, cfg.android.flow, cfg.ported_flow), ("standard", "standard", False))
+        data = fud_ai_data()
+        data["ios"]["flow"] = "fud"
+        with self.assertRaisesRegex(config.ConfigError, r"ios.flow: 'fud' is not supported .*accepted: standard, "
+                                                        r"scowld, .*also fud-ai \(= standard\)"):
+            config.parse(data)
+        data = fud_ai_data()
+        data["android"]["flow"] = "scowld"
+        with self.assertRaisesRegex(config.ConfigError, "android.flow: 'scowld'"):
+            config.parse(data)
+
+    def test_the_build_runner(self) -> None:
+        self.assertIsNone(config.parse(fud_ai_data()).ios.build.runner)
+        cfg = config.parse(mutated("ios.build.developer_dir", "/Applications/Xcode_26.app/Contents/Developer"))
+        self.assertIsNone(cfg.ios.build.runner)
+        data = fud_ai_data()
+        data["ios"]["build"]["runner"] = "macos-26"
+        self.assertEqual(config.parse(data).ios.build.runner, "macos-26")
+
     def test_the_watch_set_comes_last(self) -> None:
         data = fud_ai_data()
         sets = data["ios"]["screenshots"]["sets"]
@@ -302,6 +333,55 @@ class PathSafetyTests(unittest.TestCase):
             self.assertEqual(config.resolve_inside(root, "ios/x", "k"), (root / "ios/x").resolve())
 
 
+def scaffold_config(*, info_plist: str | None) -> str:
+    """A config for trees.write_new_app_tree (ios only)."""
+    plist = f'info_plist = "{info_plist}"\n' if info_plist else ""
+    return ('schema = 1\n[app]\nname = "My App"\nslug = "my-app"\n[ios]\ntag_prefix = "v"\n'
+            'bundle_id = "com.example.myapp"\nasc_app_id = "1234567890"\nteam_id = "ABCDE12345"\n'
+            'project = "ios/MyApp.xcodeproj"\nscheme = "MyApp"\napp_target = "MyApp"\n' + plist +
+            'gate_jobs = [{ id = "ios-tests", uses = "./.github/workflows/ios-tests.yml" }]\n'
+            '[ios.build]\ndeveloper_dir = "/Applications/Xcode_27.app/Contents/Developer"\ncheckout = ["/ios/"]\n')
+
+
+class StepTableTests(unittest.TestCase):
+    """listing, whats-new and screenshots with --platform all do only the platforms whose table the config has."""
+
+    def test_platform_all_skips_a_missing_table(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = trees.write_new_app_tree(Path(tmp) / "app")
+            trees.write_text(root, "store/store-release.toml", scaffold_config(info_plist="ios/MyApp/Info.plist"))
+            out = Path(tmp) / "out"
+            for command, verb, extra, table in (
+                    ("listing", "prepare", [], "[ios.listing] or [android.listing]"),
+                    ("whats-new", "prepare", ["--tag", "dry-run"], "[ios.whats_new] or [android.whats_new]"),
+                    ("screenshots", "stage", [], "[[ios.screenshots.sets]] or [android.screenshots]")):
+                with self.subTest(command=command):
+                    code, stdout, stderr = run_cli(["--app-root", str(root), command, verb, "--platform", "all",
+                                                    "--out", str(out), *extra])
+                    self.assertEqual(code, 0, stderr)
+                    self.assertIn(f"the config has no {table}; nothing to do", stdout)
+                    # An explicit platform is a request for that table's files: it still fails without them.
+                    try:
+                        code, _, stderr = run_cli(["--app-root", str(root), command, verb, "--platform", "ios",
+                                                   "--out", str(out), *extra])
+                    except FileNotFoundError as exc:
+                        code, stderr = 1, str(exc)
+                    self.assertEqual(code, 1, stderr)
+            self.assertFalse(out.exists())
+
+    def test_platform_all_keeps_every_platform_with_its_table(self) -> None:
+        app = support_apps.default_app()
+        cli_app = mock.Mock(config=app.config)
+        for command in ("listing", "whats-new", "screenshots"):
+            self.assertEqual(cli.narrow_to_tables("all", cli_app, command), "all")
+        data = fud_ai_data()
+        del data["ios"]["whats_new"]
+        cli_app = mock.Mock(config=config.parse(data))
+        self.assertEqual(cli.narrow_to_tables("all", cli_app, "whats-new"), "play")
+        self.assertEqual(cli.narrow_to_tables("all", cli_app, "listing"), "all")
+        self.assertEqual(cli.narrow_to_tables("ios", cli_app, "whats-new"), None)
+
+
 class ConfigFilesTests(unittest.TestCase):
     def setUp(self) -> None:
         tmp = tempfile.TemporaryDirectory()
@@ -317,6 +397,24 @@ class ConfigFilesTests(unittest.TestCase):
         (self.app.root / "scripts/ci/check_catalog.py").unlink()
         with self.assertRaisesRegex(config.ConfigError, r"catalog.checks\[0\]"):
             config.check_files(self.app.config, self.app.root)
+
+    def test_without_info_plist_xcode_must_generate_it(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = trees.write_new_app_tree(Path(tmp) / "generated", generated_plist=True)
+            text = scaffold_config(info_plist=None)
+            cfg = config.parse(tomllib.loads(text))
+            self.assertIsNone(cfg.ios.info_plist)
+            self.assertIn("MyApp: no INFOPLIST_FILE (Xcode generates the Info.plist)", config.check_files(cfg, root))
+            self.assertEqual(ios_release.check_export_compliance(root / cfg.ios.pbxproj, "MyApp"), "NO")
+            # An INFOPLIST_FILE the config does not name would not be checked out: name it.
+            root = trees.write_new_app_tree(Path(tmp) / "with-file")
+            with self.assertRaisesRegex(config.ConfigError, r'MyApp/Info.plist \(ios/MyApp/Info.plist\); set '
+                                                            r'ios.info_plist = "ios/MyApp/Info.plist"'):
+                config.check_files(cfg, root)
+            (root / "ios/MyApp.xcodeproj/project.pbxproj").write_text(trees.pbxproj(
+                {"MyApp": {}}, project_name="MyApp", marketing="1.0", build="1"))
+            with self.assertRaisesRegex(config.ConfigError, "neither an INFOPLIST_FILE nor GENERATE_INFOPLIST_FILE"):
+                config.check_files(cfg, root)
 
     def test_info_plist_must_be_the_app_targets_infoplist_file(self) -> None:
         data = fud_ai_data()
@@ -919,7 +1017,7 @@ class ConfigExportTests(unittest.TestCase):
             "STORE_RELEASE_CONFIG=store/store-release.toml", "STORE_RELEASE_SLUG=fudai", "STORE_RELEASE_APP_NAME=Fud AI", "STORE_RELEASE_IOS_TAG_PREFIX=ios-v",
             "STORE_RELEASE_IOS_BUNDLE_ID=com.apoorvdarshan.calorietracker", "STORE_RELEASE_IOS_TEAM_ID=23RV7FYH36",
             "STORE_RELEASE_IOS_PROJECT=ios/calorietracker.xcodeproj", "STORE_RELEASE_IOS_SCHEME=calorietracker",
-            "STORE_RELEASE_IOS_LOCALE=en-US", "STORE_RELEASE_IOS_FLOW=fud-ai", "STORE_RELEASE_IOS_VERIFY_IPA=false",
+            "STORE_RELEASE_IOS_LOCALE=en-US", "STORE_RELEASE_IOS_FLOW=standard", "STORE_RELEASE_IOS_VERIFY_IPA=false",
             "STORE_RELEASE_IOS_SOURCE_ARCHIVE=false",
         ])
         android = quiet(stage.config_export, cfg, "android-publish", environ={})
@@ -939,6 +1037,22 @@ class ConfigExportTests(unittest.TestCase):
         self.assertIn("STORE_RELEASE_HAS_ANDROID=false", ios_only)
         self.assertFalse([line for line in ios_only if "_ANDROID_" in line and "HAS_" not in line])
         self.assertFalse([line for line in lines + android if "_HAS_" in line], "only the checks job needs them")
+
+    def test_the_checks_job_learns_which_tables_the_config_has(self) -> None:
+        cfg = config.parse(fud_ai_data())
+        lines = quiet(stage.config_export, cfg, "checks", environ={})
+        tables = [line for line in lines if re.match(r"STORE_RELEASE_HAS_(IOS|ANDROID)_", line)]
+        self.assertEqual(tables, [f"STORE_RELEASE_HAS_{name.upper().replace('.', '_')}=true"
+                                  for name in stage.OPTIONAL_TABLES])
+        data = fud_ai_data()
+        for name in ("listing", "whats_new", "screenshots", "creative", "products"):
+            del data["ios"][name]
+        del data["android"]["screenshots"]
+        lines = quiet(stage.config_export, config.parse(data), "checks", environ={})
+        self.assertIn("STORE_RELEASE_HAS_IOS_LISTING=false", lines)
+        self.assertIn("STORE_RELEASE_HAS_IOS_PRODUCTS=false", lines)
+        self.assertIn("STORE_RELEASE_HAS_ANDROID_LISTING=true", lines)
+        self.assertIn("STORE_RELEASE_HAS_ANDROID_SCREENSHOTS=false", lines)
 
     def test_unsafe_values_and_missing_platforms_fail(self) -> None:
         data = fud_ai_data()
@@ -1347,10 +1461,42 @@ class ReleaseTagTests(unittest.TestCase):
 
 FORBIDDEN = ("calorietracker", "fudai", "FudAI", "Fud AI", "6758935726", "23RV7FYH36",
              "35d739f426248c3c04f344ffaaf972dabc67b9aaa64f49143ef8f3f4b1f704e0")
+# The apps that run on store-release (examples/<app>/): none of their identities may reach the shared code.
+USED_BY = ("fud-ai", "scowld", "verceltics", "abysm", "pcm-notes", "quit-all")
+# store-release's own CI, release and probe workflows name its repository and the canary app by design.
+OWN_WORKFLOWS = ("ci.yml", "codeql.yml", "dependency-review.yml", "fuzz.yml", "probe-inner.yml", "probe-rerun.yml",
+                 "release.yml", "scorecard.yml")
+# The one place the package names its own repository: the default for callers render and init.
+OWN_REPOSITORY_LINE = 'DEFAULT_REPOSITORY = "apoorvdarshan/store-release"'
+
+
+def app_identities() -> list[str]:
+    """Every app's name, bundle ids, App Store Connect app id, team, package, upload certificate and product prefix."""
+    values = set(FORBIDDEN)
+    for app in USED_BY:
+        data = tomllib.loads((TOOL_ROOT / "examples" / app / "store-release.toml").read_text())
+        values.add(data["app"]["name"])
+        ios, android, catalog_table = data.get("ios", {}), data.get("android", {}), data.get("catalog", {})
+        values |= {ios[key] for key in ("bundle_id", "asc_app_id", "team_id") if key in ios}
+        values |= set(ios.get("build", {}).get("extensions", []))
+        values |= {android[key] for key in ("package", "upload_cert_sha256") if key in android}
+        if "id_prefix" in catalog_table:
+            values.add(catalog_table["id_prefix"].rstrip("."))
+    return sorted(values)
+
+
+def shared_files() -> list[Path]:
+    """The package (without the ported flows, which are the apps' own scripts), the reusable workflows and
+    the job-setup action."""
+    files = [path for path in sorted((TOOL_ROOT / "store_release").rglob("*.py"))
+             if "flows" not in path.relative_to(TOOL_ROOT / "store_release").parts[:1]]
+    files += [path for path in sorted((TOOL_ROOT / ".github/workflows").glob("*.yml")) if path.name not in OWN_WORKFLOWS]
+    files += [path for path in sorted((TOOL_ROOT / ".github/actions").rglob("*")) if path.is_file()]
+    return files
 
 
 class NoHardCodedAppTests(unittest.TestCase):
-    """The package, the reusable workflows and the job-setup action never name one app."""
+    """The package, the reusable workflows and the job-setup action never name an app or its account."""
 
     def test_no_fud_ai_values(self) -> None:
         files = sorted((TOOL_ROOT / "store_release").rglob("*.py"))
@@ -1364,6 +1510,28 @@ class NoHardCodedAppTests(unittest.TestCase):
             for word in FORBIDDEN:
                 if word in text:
                     found.append(f"{path.relative_to(TOOL_ROOT)}: {word}")
+        self.assertEqual(found, [])
+
+    def test_no_value_of_any_app_that_uses_store_release(self) -> None:
+        identities = app_identities()
+        self.assertGreater(len(identities), 20)
+        found = []
+        for path in shared_files():
+            text = path.read_text(encoding="utf-8")
+            for value in identities:
+                if value in text:
+                    found.append(f"{path.relative_to(TOOL_ROOT)}: {value}")
+        self.assertEqual(found, [])
+
+    def test_no_account_is_named_but_store_release_itself(self) -> None:
+        found = []
+        for path in shared_files():
+            for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                if "apoorvdarshan" in line and line.strip() != OWN_REPOSITORY_LINE:
+                    found.append(f"{path.relative_to(TOOL_ROOT)}:{number}: {line.strip()}")
+                if re.search(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+\.[A-Za-z]{2,}", line) and "noreply" not in line:
+                    if not re.search(r"@[0-9a-f]{40}|@v?[0-9]|@main|@refs|@\$|@\{", line):
+                        found.append(f"{path.relative_to(TOOL_ROOT)}:{number}: an email address")
         self.assertEqual(found, [])
 
 

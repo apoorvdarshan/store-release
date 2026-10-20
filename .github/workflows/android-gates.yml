@@ -107,9 +107,9 @@ jobs:
         run: python3 -I -u .store-release/run.py yanked check --warn-only
       # STORE_SYNC_REVENUECAT is read strictly (an invalid value fails). Read it here, before
       # anything is built, so a typo cannot fail a release after the Play listing changed.
-      # The gate itself still runs in the release job, where fud-ai ran it.
+      # The gate itself runs later, in the release job after the Play listing step.
       - name: Check the RevenueCat switch
-        if: github.event_name == 'push' && env.STORE_RELEASE_ANDROID_FLOW == 'fud-ai'
+        if: github.event_name == 'push' && env.STORE_RELEASE_ANDROID_FLOW == 'standard'
         env:
           STORE_SYNC_REVENUECAT: ${{ vars.STORE_SYNC_REVENUECAT }}
         run: python3 -I -u .store-release/run.py --app-root app revenuecat-gate --check-switch
@@ -128,7 +128,7 @@ jobs:
       # section is fine: GitHub generates the notes), or when What's New or the
       # listing is switched on without listing text that fits Google Play.
       - name: Check reviewed release notes, What's New and listing text
-        if: steps.gates.outputs.github_release == 'true' && env.STORE_RELEASE_ANDROID_FLOW == 'fud-ai'
+        if: steps.gates.outputs.github_release == 'true' && env.STORE_RELEASE_ANDROID_FLOW == 'standard'
         env:
           WHATS_NEW: ${{ steps.gates.outputs.whats_new }}
           LISTING: ${{ steps.gates.outputs.listing }}
@@ -147,7 +147,7 @@ jobs:
           fi
       # The verceltics flow: the reviewed notes and, with What's New on, the tag's Play text.
       - name: Check reviewed release notes and What's New (ported flow)
-        if: steps.gates.outputs.github_release == 'true' && env.STORE_RELEASE_ANDROID_FLOW != 'fud-ai'
+        if: steps.gates.outputs.github_release == 'true' && env.STORE_RELEASE_ANDROID_FLOW != 'standard'
         env:
           WHATS_NEW: ${{ steps.gates.outputs.whats_new }}
         run: |
@@ -158,7 +158,7 @@ jobs:
           fi
       # Read-only. The GitHub Release APK must install over every earlier one.
       - name: Check this versionCode is new to GitHub Releases (read-only)
-        if: steps.gates.outputs.github_release == 'true' && env.STORE_RELEASE_ANDROID_FLOW == 'fud-ai'
+        if: steps.gates.outputs.github_release == 'true' && env.STORE_RELEASE_ANDROID_FLOW == 'standard'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -166,26 +166,26 @@ jobs:
           gh release list --repo "$GITHUB_REPOSITORY" --limit 1000 --json tagName,name > "$RUNNER_TEMP/releases.json"
           python3 -I -u .store-release/run.py --app-root app android github-preflight --releases "$RUNNER_TEMP/releases.json"
       - name: Check the Play service account secret is set
-        if: steps.gates.outputs.play_upload == 'true' && env.STORE_RELEASE_ANDROID_FLOW == 'fud-ai'
+        if: steps.gates.outputs.play_upload == 'true' && env.STORE_RELEASE_ANDROID_FLOW == 'standard'
         env:
           HAS_PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON != '' }}
         run: python3 -I -u .store-release/run.py --app-root app secrets check PLAY_SERVICE_ACCOUNT_JSON
       - name: Install store tooling
         if: >-
-          (steps.gates.outputs.play_upload == 'true' && env.STORE_RELEASE_ANDROID_FLOW == 'fud-ai') ||
-          (steps.gates.outputs.github_release == 'true' && env.STORE_RELEASE_ANDROID_FLOW != 'fud-ai')
+          (steps.gates.outputs.play_upload == 'true' && env.STORE_RELEASE_ANDROID_FLOW == 'standard') ||
+          (steps.gates.outputs.github_release == 'true' && env.STORE_RELEASE_ANDROID_FLOW != 'standard')
         run: python3 -m pip install --disable-pip-version-check --require-hashes -r .store-release/requirements.txt
       # The verceltics flow: every release run (the master switch on) checks with a read-only
       # Play edit that this versionCode is new, whether or not a track is selected.
       - name: Check versionCode is new on Google Play (read-only, ported flow)
-        if: steps.gates.outputs.github_release == 'true' && env.STORE_RELEASE_ANDROID_FLOW != 'fud-ai'
+        if: steps.gates.outputs.github_release == 'true' && env.STORE_RELEASE_ANDROID_FLOW != 'standard'
         env:
           PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
         run: python3 -I -u .store-release/run.py --app-root app android check-version-code
       # Read-only (a throwaway Play edit that is deleted). Play rejects a versionCode
       # it has seen, so stop here, before quality and the build, unless it is new.
       - name: Check this versionCode is new to Google Play (read-only)
-        if: steps.gates.outputs.play_upload == 'true' && env.STORE_RELEASE_ANDROID_FLOW == 'fud-ai'
+        if: steps.gates.outputs.play_upload == 'true' && env.STORE_RELEASE_ANDROID_FLOW == 'standard'
         env:
           PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
           PLAY_TRACKS: ${{ steps.gates.outputs.play_tracks }}

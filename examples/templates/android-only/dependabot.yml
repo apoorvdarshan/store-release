@@ -1,0 +1,19 @@
+# Dependabot keeps the store-release pin and the other GitHub Actions up to date.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      # store-release's callers move together, in a pull request of their own (the first
+      # group a dependency matches wins, so this one comes first).
+      store-release:
+        patterns: ["apoorvdarshan/store-release*"]
+      github-actions:
+        patterns: ["*"]
+    # These pins run with the app's signing and store credentials: a new store-release
+    # release waits seven days before it is proposed. Security updates never wait.
+    cooldown:
+      default-days: 7
+      include: ["apoorvdarshan/store-release*"]

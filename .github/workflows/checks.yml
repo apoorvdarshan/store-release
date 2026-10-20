@@ -98,12 +98,18 @@ jobs:
         if: env.STORE_RELEASE_HAS_IOS == 'true' && env.STORE_RELEASE_PORTED_FLOW != 'true'
         run: |
           set -euo pipefail
-          UPLOAD_LISTING=true UPLOAD_WHATS_NEW=true SUBMIT_IOS_REVIEW=true PUBLIC_RELEASE=false \
+          # Every store step the config has a table for (an app without one has nothing to check there).
+          UPLOAD_LISTING="$STORE_RELEASE_HAS_IOS_LISTING" UPLOAD_WHATS_NEW="$STORE_RELEASE_HAS_IOS_WHATS_NEW" \
+            SUBMIT_IOS_REVIEW="$STORE_RELEASE_HAS_IOS_PRODUCTS" PUBLIC_RELEASE=false \
             python3 -I -u .store-release/run.py --app-root app ios store-step --dry-run --metadata-dir "$RUNNER_TEMP/store-meta" --build-id DRY-RUN --build-number 1
-          UPLOAD_CREATIVE_ASSETS=true python3 -I -u .store-release/run.py --app-root app ios store-step --dry-run
+          if [ "$STORE_RELEASE_HAS_IOS_CREATIVE" = true ]; then
+            UPLOAD_CREATIVE_ASSETS=true python3 -I -u .store-release/run.py --app-root app ios store-step --dry-run
+          fi
       - name: Validate the Play publisher step (dry-run, no network)
         if: env.STORE_RELEASE_HAS_ANDROID == 'true' && env.STORE_RELEASE_PORTED_FLOW != 'true'
-        run: UPLOAD_LISTING=true python3 -I -u .store-release/run.py --app-root app android play-listing --dry-run --metadata-dir "$RUNNER_TEMP/store-meta"
+        run: >-
+          UPLOAD_LISTING="$STORE_RELEASE_HAS_ANDROID_LISTING"
+          python3 -I -u .store-release/run.py --app-root app android play-listing --dry-run --metadata-dir "$RUNNER_TEMP/store-meta"
       - name: RevenueCat catalog dry-run
         if: env.STORE_RELEASE_PORTED_FLOW != 'true'
         env:
@@ -145,10 +151,10 @@ jobs:
         if: env.STORE_RELEASE_PORTED_FLOW == 'true'
         run: |
           set -euo pipefail
-          if [ "$STORE_RELEASE_HAS_IOS" = true ] && [ "${STORE_RELEASE_IOS_FLOW:-fud-ai}" != fud-ai ]; then
+          if [ "$STORE_RELEASE_HAS_IOS" = true ] && [ "${STORE_RELEASE_IOS_FLOW:-standard}" != standard ]; then
             python3 -I -u .store-release/run.py --app-root app ios pr-checks
           fi
-          if [ "$STORE_RELEASE_HAS_ANDROID" = true ] && [ "${STORE_RELEASE_ANDROID_FLOW:-fud-ai}" != fud-ai ]; then
+          if [ "$STORE_RELEASE_HAS_ANDROID" = true ] && [ "${STORE_RELEASE_ANDROID_FLOW:-standard}" != standard ]; then
             python3 -I -u .store-release/run.py --app-root app android pr-checks
           fi
       # Also reads (read-only) which commit the pinned version's release tag points at.

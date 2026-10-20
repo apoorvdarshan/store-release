@@ -6,7 +6,7 @@
 #   test (strict)    both locks; unit, fixture apps, fud-ai parity and workflow tests; no skip
 #   test (macos)     the release-path profiles on macOS (the build job's stdlib-only code)
 #   lint             Python lint (ruff, pyflakes rules)
-#   workflows        actionlint on these workflows and on the rendered fud-ai callers
+#   workflows        actionlint on these workflows and on every example's and template's callers
 #   canary (fud-ai)  advisory: the store checks against apoorvdarshan/fud-ai@main
 name: CI
 
@@ -141,33 +141,55 @@ jobs:
         run: >-
           "$RUNNER_TEMP/actionlint" -color
           -ignore 'property "workflow_(sha|repository)" is not defined in object type'
-      # The callers live in app repositories: render fud-ai's into a scratch repository with
-      # stub local workflows, so their local references resolve. This commit is not a release
-      # tag's, hence --allow-untagged. actionlint 1.7.12 does not know concurrency.queue yet
-      # (documented); drop the ignore once it does.
-      - name: Lint every app's rendered callers
+      # The callers live in app repositories: copy each example's and template's into a scratch
+      # repository with stub local workflows, so their local references resolve. actionlint
+      # 1.7.12 does not know concurrency.queue yet (documented); drop the ignore once it does.
+      - name: Lint every app's and template's rendered callers
         run: |
           set -euo pipefail
           python3 -I -u scripts/render_examples.py --check
-          for app in examples/*/; do
-            app="$(basename "$app")"
-            [ -d "examples/$app/callers" ] || continue
+          for dir in examples/*/ examples/templates/*/; do
+            dir="${dir%/}"
+            [ -d "$dir/callers" ] || continue
+            app="$(basename "$dir")"
             repo="$RUNNER_TEMP/callers-$app"
             mkdir -p "$repo/.github/workflows"
             git -C "$repo" init -q
-            cp "examples/$app/callers/"*.yml "$repo/.github/workflows/"
+            cp "$dir/callers/"*.yml "$repo/.github/workflows/"
             # Workflows an app adds with its migration (examples/<app>/app-files).
-            if [ -d "examples/$app/app-files/.github/workflows" ]; then
-              cp "examples/$app/app-files/.github/workflows/"*.yml "$repo/.github/workflows/"
+            if [ -d "$dir/app-files/.github/workflows" ]; then
+              cp "$dir/app-files/.github/workflows/"*.yml "$repo/.github/workflows/"
             fi
             # The apps' own gate workflows, as stubs that take the inputs the callers pass.
-            for stub in ios-tests quality ci; do
+            for stub in ios-tests android-tests quality ci; do
               printf 'name: %s\non:\n  workflow_call:\n    inputs:\n      android-release:\n        type: boolean\n        default: false\npermissions:\n  contents: read\njobs:\n  stub:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo stub\n' \
                 "$stub" > "$repo/.github/workflows/$stub.yml"
             done
             (cd "$repo" && "$RUNNER_TEMP/actionlint" -color -ignore 'unexpected key "queue" for "concurrency" section')
             echo "$app: callers lint clean"
           done
+
+      # job-setup's lazy blob fetch on GitHub, with a job token: a blobless, credential-free checkout
+      # of this repository (as the reusable workflows check out an app), then fetch-app-files.sh.
+      - name: Check out this repository blobless, as the reusable workflows check out an app
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: fetch-probe
+          persist-credentials: false
+          filter: blob:none
+          sparse-checkout-cone-mode: false
+          sparse-checkout: /README.md
+      - name: Fetch more of it with job-setup's fetch script and the job token
+        env:
+          FETCH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          printf '/README.md\n/docs/\n' > "$RUNNER_TEMP/fetch-probe-paths.txt"
+          bash .github/actions/job-setup/fetch-app-files.sh fetch-probe "$RUNNER_TEMP/fetch-probe-paths.txt"
+          test -f fetch-probe/docs/config.md
+          test ! -e fetch-probe/store_release
+          if grep -qi extraheader fetch-probe/.git/config; then echo "error: a credential reached .git/config" >&2; exit 1; fi
+          echo "fetched $(find fetch-probe/docs -type f | wc -l) docs files; no credential persisted"
 
   # Advisory, never required: fud-ai's real files through the store checks (without the
   # pin, caller, yanked and artifact steps). Never uploads anything: app listings and
@@ -235,4 +257,4 @@ jobs:
           python3 -m pip install --disable-pip-version-check --require-hashes \
             -r .store-release/requirements.txt -r .store-release/requirements-checks.txt
       - name: Run the canary
-        run: python3 -I -u .store-release/run.py --app-root app canary
+        run: python3 -I -u .store-release/run.py --app-root app canary --expect .store-release/tests/canary/fud-ai.toml

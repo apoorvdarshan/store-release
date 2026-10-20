@@ -155,12 +155,12 @@ jobs:
           packages: ${{ env.STORE_RELEASE_ANDROID_SDK_PACKAGES }}
       - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
       - name: Validate IAP catalog
-        if: env.STORE_RELEASE_ANDROID_FLOW == 'fud-ai'
+        if: env.STORE_RELEASE_ANDROID_FLOW == 'standard'
         run: python3 -I -u .store-release/run.py --app-root app catalog check
       # The verceltics flow: its Android catalog check, and the Play listing and screenshots
       # this run uploads.
       - name: Validate the IAP catalog, and the Play listing and screenshots this run uploads (ported flow)
-        if: env.STORE_RELEASE_ANDROID_FLOW != 'fud-ai'
+        if: env.STORE_RELEASE_ANDROID_FLOW != 'standard'
         env:
           LISTING: ${{ inputs.listing }}
           SCREENSHOTS: ${{ inputs.screenshots }}
@@ -174,7 +174,7 @@ jobs:
             python3 -I -u .store-release/run.py --app-root app android play-listing check "${flags[@]}"
           fi
       - name: Prepare reviewed release notes, What's New + listing text (ported flow, local only)
-        if: env.RELEASE_RUN == 'true' && env.STORE_RELEASE_ANDROID_FLOW != 'fud-ai'
+        if: env.RELEASE_RUN == 'true' && env.STORE_RELEASE_ANDROID_FLOW != 'standard'
         env:
           WHATS_NEW: ${{ inputs.whats_new }}
           LISTING: ${{ inputs.listing }}
@@ -186,7 +186,7 @@ jobs:
           if [ "$LISTING" != true ]; then args+=(--no-listing); fi
           python3 -I -u .store-release/run.py --app-root app android play-listing prepare --out "$RUNNER_TEMP/store-meta" "${args[@]}"
       - name: Prepare reviewed release notes, What's New + listing text (local only)
-        if: env.RELEASE_RUN == 'true' && env.STORE_RELEASE_ANDROID_FLOW == 'fud-ai'
+        if: env.RELEASE_RUN == 'true' && env.STORE_RELEASE_ANDROID_FLOW == 'standard'
         env:
           WHATS_NEW: ${{ inputs.whats_new }}
           LISTING: ${{ inputs.listing }}
@@ -292,24 +292,24 @@ jobs:
       - name: Check the Play service account secret is set
         if: >-
           (inputs.listing == 'true' || inputs.screenshots == 'true' || inputs.play_upload == 'true') &&
-          env.STORE_RELEASE_ANDROID_FLOW == 'fud-ai'
+          env.STORE_RELEASE_ANDROID_FLOW == 'standard'
         env:
           HAS_PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON != '' }}
         run: python3 -I -u .store-release/run.py --app-root app secrets check PLAY_SERVICE_ACCOUNT_JSON
       - name: Stage Play screenshots
-        if: inputs.screenshots == 'true' && env.STORE_RELEASE_ANDROID_FLOW == 'fud-ai'
+        if: inputs.screenshots == 'true' && env.STORE_RELEASE_ANDROID_FLOW == 'standard'
         env:
           STORE_UPLOAD_SCREENSHOTS: "true"
         run: python3 -I -u .store-release/run.py --app-root app screenshots stage --platform play --out "$RUNNER_TEMP/store-release/screenshots"
       - name: Play listing / screenshots upload (ported flow)
-        if: (inputs.listing == 'true' || inputs.screenshots == 'true') && env.STORE_RELEASE_ANDROID_FLOW != 'fud-ai'
+        if: (inputs.listing == 'true' || inputs.screenshots == 'true') && env.STORE_RELEASE_ANDROID_FLOW != 'standard'
         env:
           UPLOAD_LISTING: ${{ inputs.listing }}
           UPLOAD_SCREENSHOTS: ${{ inputs.screenshots }}
           PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
         run: python3 -I -u .store-release/run.py --app-root app android play-listing upload --metadata-dir "$RUNNER_TEMP/store-meta"
       - name: Play listing / screenshots upload
-        if: (inputs.listing == 'true' || inputs.screenshots == 'true') && env.STORE_RELEASE_ANDROID_FLOW == 'fud-ai'
+        if: (inputs.listing == 'true' || inputs.screenshots == 'true') && env.STORE_RELEASE_ANDROID_FLOW == 'standard'
         env:
           UPLOAD_LISTING: ${{ inputs.listing }}
           UPLOAD_SCREENSHOTS: ${{ inputs.screenshots }}
@@ -318,12 +318,12 @@ jobs:
           python3 -I -u .store-release/run.py --app-root app android play-listing --metadata-dir "$RUNNER_TEMP/store-meta"
           --screenshots-dir "$RUNNER_TEMP/store-release/screenshots/play/phone"
       - name: RevenueCat catalog sync (gated)
-        if: env.RELEASE_RUN == 'true' && env.STORE_RELEASE_ANDROID_FLOW == 'fud-ai'
+        if: env.RELEASE_RUN == 'true' && env.STORE_RELEASE_ANDROID_FLOW == 'standard'
         env:
           STORE_SYNC_REVENUECAT: ${{ vars.STORE_SYNC_REVENUECAT }}
         run: python3 -I -u .store-release/run.py --app-root app revenuecat-gate
       - name: Keep English What's New only
-        if: inputs.play_upload == 'true' && inputs.whats_new == 'true' && env.STORE_RELEASE_ANDROID_FLOW == 'fud-ai'
+        if: inputs.play_upload == 'true' && inputs.whats_new == 'true' && env.STORE_RELEASE_ANDROID_FLOW == 'standard'
         run: |
           NOTES="$RUNNER_TEMP/store-meta/play/whatsnew-$STORE_RELEASE_ANDROID_LOCALE"
           if [ ! -s "$NOTES" ]; then
@@ -337,14 +337,14 @@ jobs:
       # earlier attempt's upload) is not uploaded again; any other state of it stops the run.
       - name: Check this versionCode on the selected Play tracks (read-only, ported flow)
         id: play_state
-        if: inputs.play_upload == 'true' && env.STORE_RELEASE_ANDROID_FLOW != 'fud-ai'
+        if: inputs.play_upload == 'true' && env.STORE_RELEASE_ANDROID_FLOW != 'standard'
         env:
           PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
           PLAY_TRACKS: ${{ inputs.play_tracks }}
         run: python3 -I -u .store-release/run.py --app-root app android play-state --tracks "$PLAY_TRACKS"
       - name: Keep English What's New only (ported flow)
         if: >-
-          inputs.play_upload == 'true' && inputs.whats_new == 'true' && env.STORE_RELEASE_ANDROID_FLOW != 'fud-ai' &&
+          inputs.play_upload == 'true' && inputs.whats_new == 'true' && env.STORE_RELEASE_ANDROID_FLOW != 'standard' &&
           steps.play_state.outputs.uploaded == 'false'
         run: |
           NOTES="$RUNNER_TEMP/store-meta/play/whatsnew-$STORE_RELEASE_ANDROID_LOCALE"
@@ -356,7 +356,7 @@ jobs:
           cp "$NOTES" "$RUNNER_TEMP/whats-new/"
       - name: Materialize the Play service-account key (ported flow)
         if: >-
-          inputs.play_upload == 'true' && inputs.play_tracks != '' && env.STORE_RELEASE_ANDROID_FLOW != 'fud-ai' &&
+          inputs.play_upload == 'true' && inputs.play_tracks != '' && env.STORE_RELEASE_ANDROID_FLOW != 'standard' &&
           steps.play_state.outputs.uploaded == 'false'
         env:
           PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
@@ -365,7 +365,7 @@ jobs:
           printf '%s' "$PLAY_SERVICE_ACCOUNT_JSON" > "$RUNNER_TEMP/play-service-account.json"
       - name: Upload to Play (${{ inputs.play_tracks }}, ported flow)
         if: >-
-          inputs.play_upload == 'true' && inputs.play_tracks != '' && env.STORE_RELEASE_ANDROID_FLOW != 'fud-ai' &&
+          inputs.play_upload == 'true' && inputs.play_tracks != '' && env.STORE_RELEASE_ANDROID_FLOW != 'standard' &&
           steps.play_state.outputs.uploaded == 'false' && inputs.whats_new != 'true'
         uses: r0adkll/upload-google-play@e738b9dd8f2476ea806d921b64aacd24f34515a5 # v1.1.5
         with:
@@ -376,7 +376,7 @@ jobs:
           status: completed
       - name: Upload to Play with What's New (${{ inputs.play_tracks }}, ported flow)
         if: >-
-          inputs.play_upload == 'true' && inputs.play_tracks != '' && env.STORE_RELEASE_ANDROID_FLOW != 'fud-ai' &&
+          inputs.play_upload == 'true' && inputs.play_tracks != '' && env.STORE_RELEASE_ANDROID_FLOW != 'standard' &&
           steps.play_state.outputs.uploaded == 'false' && inputs.whats_new == 'true'
         uses: r0adkll/upload-google-play@e738b9dd8f2476ea806d921b64aacd24f34515a5 # v1.1.5
         with:
@@ -391,7 +391,7 @@ jobs:
         run: rm -f "${RUNNER_TEMP:?}/play-service-account.json"
       - name: Check what Google Play already has (read-only)
         id: play
-        if: inputs.play_upload == 'true' && env.STORE_RELEASE_ANDROID_FLOW == 'fud-ai'
+        if: inputs.play_upload == 'true' && env.STORE_RELEASE_ANDROID_FLOW == 'standard'
         env:
           PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
           PLAY_TRACKS: ${{ inputs.play_tracks }}
@@ -400,7 +400,7 @@ jobs:
       # Both upload steps also require a non-empty track list: the action falls back to production without one.
       - name: Upload to Play (${{ inputs.play_tracks }})
         if: >-
-          inputs.play_upload == 'true' && inputs.play_tracks != '' && env.STORE_RELEASE_ANDROID_FLOW == 'fud-ai' &&
+          inputs.play_upload == 'true' && inputs.play_tracks != '' && env.STORE_RELEASE_ANDROID_FLOW == 'standard' &&
           steps.play.outputs.play_upload_needed == 'true' && inputs.whats_new != 'true'
         uses: r0adkll/upload-google-play@e738b9dd8f2476ea806d921b64aacd24f34515a5 # v1.1.5
         with:
@@ -411,7 +411,7 @@ jobs:
           status: completed
       - name: Upload to Play with What's New (${{ inputs.play_tracks }})
         if: >-
-          inputs.play_upload == 'true' && inputs.play_tracks != '' && env.STORE_RELEASE_ANDROID_FLOW == 'fud-ai' &&
+          inputs.play_upload == 'true' && inputs.play_tracks != '' && env.STORE_RELEASE_ANDROID_FLOW == 'standard' &&
           steps.play.outputs.play_upload_needed == 'true' && inputs.whats_new == 'true'
         uses: r0adkll/upload-google-play@e738b9dd8f2476ea806d921b64aacd24f34515a5 # v1.1.5
         with:

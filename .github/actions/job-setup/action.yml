@@ -22,7 +22,7 @@ runs:
     - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
       with:
         python-version: "3.13"
-    - name: Check the tooling, the config and this job's files
+    - name: Check the tooling and the config
       shell: bash
       env:
         TOOL_SHA: ${{ inputs.tool-sha }}
@@ -35,5 +35,16 @@ runs:
         "${tool[@]}" tool check --tool-sha "$TOOL_SHA" --expected "$EXPECTED_TOOL_SHA"
         "${tool[@]}" config check
         "${tool[@]}" paths --job "$SETUP_JOB" > "$RUNNER_TEMP/store-release-paths.txt"
-        git -C app sparse-checkout set --no-cone --stdin < "$RUNNER_TEMP/store-release-paths.txt"
-        "${tool[@]}" config export --job "$SETUP_JOB"
+    # Blobless and credential-free: the job's read-only token reaches only the lazy blob fetch
+    # (private app repositories), as environment config (fetch-app-files.sh).
+    - name: Check out this job's files of the app
+      shell: bash
+      env:
+        FETCH_TOKEN: ${{ github.token }}
+      run: bash "$GITHUB_ACTION_PATH/fetch-app-files.sh" app "$RUNNER_TEMP/store-release-paths.txt"
+    - name: Export this job's config
+      shell: bash
+      env:
+        SETUP_JOB: ${{ inputs.job }}
+        SETUP_CONFIG: ${{ inputs.config }}
+      run: python3 -I -u .store-release/run.py --app-root app --config "$SETUP_CONFIG" config export --job "$SETUP_JOB"

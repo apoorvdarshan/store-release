@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 import urllib.error
 from contextlib import redirect_stderr, redirect_stdout
@@ -63,6 +64,17 @@ class RenderTests(unittest.TestCase):
         for platform, name in FILES.items():
             with self.subTest(platform=platform):
                 self.assertEqual(render(platform, version=__version__), (EXAMPLES / "fud-ai" / "callers" / name).read_text())
+
+    def test_the_build_runner_is_passed_only_when_configured(self) -> None:
+        text = render("ios")
+        self.assertNotIn("runner:", text)
+        data = tomllib.loads((EXAMPLES / "fud-ai" / "store-release.toml").read_text())
+        data["ios"]["build"]["runner"] = "macos-26"
+        build = yaml.safe_load(render("ios", config.parse(data)))["jobs"]["build"]
+        self.assertEqual(build["with"]["runner"], "macos-26")
+        self.assertEqual(list(build["with"])[0], "runner")
+        others = {key: value for key, value in build["with"].items() if key != "runner"}
+        self.assertEqual(others, yaml.safe_load(text)["jobs"]["build"]["with"])
 
     def test_the_rendered_callers_are_pinned_and_valid_yaml(self) -> None:
         for platform in FILES:

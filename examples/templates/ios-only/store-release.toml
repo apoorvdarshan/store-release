@@ -1,0 +1,39 @@
+# store-release configuration for Example App, written by `run.py init`.
+# Every key: https://github.com/apoorvdarshan/store-release/blob/v0.2.0/docs/config.md
+# Switches are repository variables and credentials repository secrets; nothing here is secret.
+schema = 1
+
+[app]
+name = "Example App"
+slug = "example-app"
+
+[ios]
+# Tags <tag_prefix><MARKETING_VERSION> release; Run workflow only validates.
+tag_prefix = "v"
+bundle_id = "com.example.app"
+# App Store Connect -> the app -> App Information -> Apple ID.
+asc_app_id = "1234567890"
+team_id = "ABCDE12345"
+project = "ios/ExampleApp.xcodeproj"
+scheme = "ExampleApp"
+app_target = "ExampleApp"
+info_plist = "ios/ExampleApp/Info.plist"
+# The app's own tests (a workflow with `on: workflow_call`): a tag releases only after they pass.
+gate_jobs = [
+  { id = "ios-tests", uses = "./.github/workflows/ios-tests.yml" },
+]
+
+[ios.build]
+developer_dir = "/Applications/Xcode_27.app/Contents/Developer"
+# What the build job checks out (a sparse checkout): the project and its sources.
+checkout = ["/ios/"]
+
+# Each IOS_UPLOAD_* switch needs its table; uncomment one when you turn its switch on.
+# [ios.listing]              # IOS_UPLOAD_LISTING: the fenced fields of APPSTORE.md
+# [ios.whats_new]            # IOS_UPLOAD_WHATS_NEW: the What's New section of APPSTORE.md
+# [[ios.screenshots.sets]]   # IOS_UPLOAD_SCREENSHOTS, one table per display type
+# display_type = "APP_IPHONE_67"
+# dir = "store/screenshots/iphone"
+# required = true
+# [ios.creative]             # IOS_UPLOAD_CREATIVE_ASSETS: store/creative/ios/{header,search-results}/
+# [ios.products]             # IOS_SUBMIT_REVIEW

@@ -1,0 +1,33 @@
+# store-release configuration for Example App, written by `run.py init`.
+# Every key: https://github.com/apoorvdarshan/store-release/blob/v0.2.0/docs/config.md
+# Switches are repository variables and credentials repository secrets; nothing here is secret.
+schema = 1
+
+[app]
+name = "Example App"
+slug = "example-app"
+
+[android]
+# Tags <tag_prefix><versionName> release; Run workflow only validates.
+tag_prefix = "v"
+package = "com.example.app"
+# Play Console -> Test and release -> App integrity -> Upload key certificate (SHA-256).
+# Nothing signed by another key is ever published.
+upload_cert_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+# The app's own tests (a workflow with `on: workflow_call`): a tag releases only after they pass.
+gate_jobs = [
+  { id = "android-tests", uses = "./.github/workflows/android-tests.yml" },
+]
+
+[android.build]
+# What the release job checks out (a sparse checkout).
+checkout = ["/android/"]
+# The upload key reaches Gradle as <dir>/keystore.properties (storeFile, storePassword,
+# keyAlias, keyPassword); the app must gitignore that file.
+signing = "keystore-properties"
+
+# Each ANDROID_UPLOAD_* switch needs its table; uncomment one when you turn its switch on.
+# [android.listing]          # ANDROID_UPLOAD_LISTING: the numbered fields of PLAYSTORE.md
+# [android.whats_new]        # ANDROID_UPLOAD_WHATS_NEW: the What's New section of PLAYSTORE.md
+# [android.screenshots]      # ANDROID_UPLOAD_SCREENSHOTS
+# dir = "store/screenshots/play"

@@ -10,18 +10,18 @@ every app constant (bundle id, App Store Connect app id, tag prefix, paths).
 Everything else, including each app's switch rules, version states, draft rules,
 product route, screenshot layout and messages, is exactly what that app ran.
 
-`ios.flow` / `android.flow` in store-release.toml selects one; "fud-ai" (the
-default) is store-release's own modules (store_release.ios, store_release.android).
+`ios.flow` / `android.flow` in store-release.toml selects one; "standard" (the
+default, called "fud-ai" before v0.3.0) is store-release's own modules
+(store_release.ios, store_release.android), the flow every new app uses.
 """
 from __future__ import annotations
 
 from pathlib import Path
 
+from store_release.config import ANDROID_FLOWS, IOS_FLOWS, STANDARD_FLOW  # noqa: F401 - re-exported
+
 # Never a real folder: a flow module used before configure() fails on its first file access.
 UNCONFIGURED_ROOT = Path("/store-release-flow-not-configured")
-
-IOS_FLOWS = ("fud-ai", "scowld", "verceltics", "abysm", "pcm-notes", "quit-all")
-ANDROID_FLOWS = ("fud-ai", "verceltics")
 # flow name -> package under store_release.flows
 PACKAGES = {"scowld": "scowld", "verceltics": "verceltics", "abysm": "abysm", "pcm-notes": "pcm_notes",
             "quit-all": "quit_all"}
@@ -33,9 +33,9 @@ def configure(config, app_root: Path) -> list[str]:
     import importlib  # noqa: PLC0415
 
     flows = []
-    if config.ios is not None and config.ios.flow != "fud-ai":
+    if config.ios is not None and config.ios.flow != STANDARD_FLOW:
         flows.append(config.ios.flow)
-    if config.android is not None and config.android.flow != "fud-ai" and config.android.flow not in flows:
+    if config.android is not None and config.android.flow != STANDARD_FLOW and config.android.flow not in flows:
         flows.append(config.android.flow)
     configured = []
     for flow in flows:

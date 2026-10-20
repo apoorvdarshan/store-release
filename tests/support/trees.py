@@ -226,6 +226,22 @@ def write_fud_ai_tree(root: Path, *, screenshots: bool = False, config: str | No
     return root
 
 
+def write_new_app_tree(root: Path, *, generated_plist: bool = False) -> Path:
+    """A new app before `run.py init`: ios/MyApp.xcodeproj (one MyApp target at 1.0 (1), its Info.plist or a
+    generated one), android/app/build.gradle.kts and the two test workflows init names by default."""
+    settings = ({"GENERATE_INFOPLIST_FILE": "YES", "INFOPLIST_KEY_ITSAppUsesNonExemptEncryption": "NO"}
+                if generated_plist else {"INFOPLIST_FILE": "MyApp/Info.plist"})
+    write_text(root, "ios/MyApp.xcodeproj/project.pbxproj",
+               pbxproj({"MyApp": settings}, project_name="MyApp", marketing="1.0", build="1"))
+    if not generated_plist:
+        (root / "ios/MyApp").mkdir(parents=True, exist_ok=True)
+        (root / "ios/MyApp/Info.plist").write_bytes(info_plist("My App"))
+    write_text(root, "android/app/build.gradle.kts", gradle(version_name="1.0", version_code=1, package="com.example.myapp"))
+    write_text(root, ".github/workflows/ios-tests.yml", STUB_WORKFLOW.format(name="iOS tests", job="tests"))
+    write_text(root, ".github/workflows/android-tests.yml", STUB_WORKFLOW.format(name="Android tests", job="tests"))
+    return root
+
+
 def write_example_tree(root: Path, *, screenshots: bool = True, config: str | None = None) -> Path:
     """The example app: one target at 1.0 (3), two App Store sets, Play, no catalog."""
     root.mkdir(parents=True, exist_ok=True)

@@ -218,7 +218,7 @@ def render_ios(config: Config, *, sha: str, version: str, repository: str = DEFA
     if ios.gate_policy == "parallel":
         needs = lambda *extra: "[" + ", ".join([*gates, *extra]) + "]"  # noqa: E731
     else:
-        # The gate jobs need prepare, so prepare comes first (as Quit All's and PCM Notes' callers had it).
+        # The gate jobs need prepare, so prepare comes first.
         needs = lambda *extra: "[" + ", ".join([*extra[:1], *gates, *extra[1:]]) + "]"  # noqa: E731
     archive_job = ("source-archive",) if ios.source_archive else ()
     if ios.gate_policy != "when-uploading":
@@ -310,7 +310,8 @@ def render_ios(config: Config, *, sha: str, version: str, repository: str = DEFA
         f"    {_uses(repository, 'ios-build.yml', sha, version)}",
         "    permissions:",
         "      contents: read",
-        *_with([("gates", f'"{gate_results}"'),
+        *_with([*([("runner", f'"{ios.build.runner}"')] if ios.build.runner else []),
+                ("gates", f'"{gate_results}"'),
                 ("mode", "${{ needs.prepare.outputs.mode }}"),
                 ("marketing_version", "${{ needs.prepare.outputs.marketing_version }}"),
                 ("build_number", "${{ needs.prepare.outputs.build_number }}"),
@@ -426,8 +427,7 @@ def render_android(config: Config, *, sha: str, version: str, app_repository: st
                               "prints, read-only, what a tag run would change."]),
         ]),
         "#",
-        "# Verifying a GitHub Release download built by store-release (earlier releases:",
-        "# store/README.md):",
+        "# Verifying a GitHub Release download built by store-release (docs/verification.md):",
         f"#   cosign verify-blob {asset}.apk --bundle {asset}.apk.sigstore.json \\",
         f"#     --certificate-identity-regexp '^https://github\\.com/{_regex_repository(repository)}"
         "/\\.github/workflows/android-publish\\.yml@[0-9a-f]{40}$' \\",

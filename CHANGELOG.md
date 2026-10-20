@@ -8,6 +8,46 @@ or `config-breaking`.
 
 ## [Unreleased]
 
+Impact: release-path
+
+### Added
+
+- `run.py init`: scaffolds `store/store-release.toml`, the three caller workflows pinned to a
+  release (the `vX.Y.Z` tag's commit, looked up on GitHub, or `--sha`) and
+  `.github/dependabot.yml` for a new app, from flags or, in a terminal, answers. The config is
+  validated before anything is written, a bad answer names its flag, and nothing is
+  overwritten without `--force`.
+- `examples/templates/` (`ios-only`, `android-only`, `ios-and-android`): what `init` writes
+  for placeholder values; a test and `scripts/render_examples.py --check` keep them equal.
+- `ios.build.runner` (optional): the build job's runner label, passed to `ios-build.yml`
+  only when set, so every existing caller renders as before.
+
+### Changed
+
+- The default flow is called `standard`; `fud-ai`, its old name, is still accepted in
+  `ios.flow` and `android.flow` and means the same flow. Messages and
+  `STORE_RELEASE_IOS_FLOW` / `STORE_RELEASE_ANDROID_FLOW` say `standard`.
+- Private app repositories work: job-setup fetches a job's files with the job's read-only
+  token, given only to that git command as environment config (never `.git/config` or
+  argv). Public repositories fetch the same files as before.
+- `ios.info_plist` is optional for the standard flow too, for an app whose Info.plist Xcode
+  generates entirely; `config check --files` then checks the project sets no
+  `INFOPLIST_FILE`.
+- Store checks (standard flow) prepare and dry-run only the listing, What's New,
+  screenshot, creative and review steps whose config table exists, so an app without them
+  passes. `listing prepare`, `whats-new prepare` and `screenshots stage` with
+  `--platform all` skip a platform without its table; an explicit platform is unchanged.
+  An app with every table (Fud AI) runs exactly the same steps.
+- No app's identity appears outside `store_release/flows/`: a test now checks the six
+  apps' names, bundle ids, App Store Connect ids, team, packages, upload certificates and
+  product prefixes, and any account or e-mail address, in the package, the reusable
+  workflows and job-setup. `canary --expect` is required (store-release's CI passes it).
+
+### App actions required
+
+None. Existing configs and callers keep working unchanged; the rendered Android caller's
+header comment changes wording only (`caller check --pr` ignores comments).
+
 ## [0.2.0] - 2026-10-21
 
 Impact: release-path
