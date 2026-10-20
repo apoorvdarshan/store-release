@@ -1,0 +1,56 @@
+# Re-run probe (docs/rerun.md): checks that "Re-run failed jobs" and "re-run one job"
+# treat called workflows the way the app callers rely on. Dispatch only; touches
+# nothing. b and c call probe-inner.yml through the same SHA-pinned path the apps use
+# (Dependabot never bumps this pin). c receives b's id and fails on attempt 1.
+#
+#   a (plain) -> b (probe-inner) -> c (probe-inner, id from b, fails on attempt 1) -> d (plain)
+#
+# Pass: attempt 2 re-runs c and d only; c prints b's attempt-1 id; job.workflow_sha is
+# the pinned SHA in both attempts; vars.PROBE_VAR resolves.
+name: Re-run probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Plain job
+        env:
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: echo "a ran in attempt $RUN_ATTEMPT"
+
+  b:
+    needs: a
+    uses: apoorvdarshan/store-release/.github/workflows/probe-inner.yml@a8c2f4aba5cf8ac9f759a318338d6f0d6beffa15 # probe-inner
+    permissions:
+      contents: read
+
+  c:
+    needs: b
+    uses: apoorvdarshan/store-release/.github/workflows/probe-inner.yml@a8c2f4aba5cf8ac9f759a318338d6f0d6beffa15 # probe-inner
+    permissions:
+      contents: read
+    with:
+      id: ${{ needs.b.outputs.id }}
+      fail_first_attempt: true
+
+  d:
+    needs: c
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Plain job
+        env:
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          C_RESULT: ${{ needs.c.result }}
+        run: echo "d ran in attempt $RUN_ATTEMPT after c ($C_RESULT)"
