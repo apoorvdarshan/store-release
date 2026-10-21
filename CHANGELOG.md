@@ -8,6 +8,19 @@ or `config-breaking`.
 
 ## [Unreleased]
 
+Impact: checks-only
+
+### Changed
+
+- [Release process](docs/release-process.md#v040-was-uploaded-by-hand): v0.4.0 reached
+  PyPI by hand. No trusted publisher was registered (a new project needs a pending
+  publisher, and pypi.org asks for the account password before adding one), so the
+  Release run's `pypi` job failed at the token exchange, and the release's own sdist and
+  wheel were uploaded with the maintainer's PyPI API token. PyPI's 0.4.0 files are the
+  release's assets but have no PEP 740 attestations, and that run's `pypi` job is not
+  re-run. Once the trusted publisher is added to the project, releases publish through
+  `release.yml`, with their attestations.
+
 ## [0.4.0] - 2026-10-21
 
 Impact: release-path

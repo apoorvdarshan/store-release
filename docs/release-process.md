@@ -200,9 +200,29 @@ for the version (the tag exists, so the precondition check refuses it).
   file name be replaced or reused, so that version's PyPI files cannot match the release.
   Release the next patch.
 - GitHub keeps a run re-runnable for 30 days. After that, release the next patch: PyPI's
-  files come only from `release.yml`, with their attestations, never from a hand upload.
+  files come only from `release.yml`, with their attestations, never from a hand upload
+  (v0.4.0 is the one exception: [below](#v040-was-uploaded-by-hand)).
 - `pypi-verify` timing out after a successful upload (PyPI slow to list the files or the
   attestations): re-run the job; it skips the upload and checks again.
+
+### v0.4.0 was uploaded by hand
+
+v0.4.0, the first PyPI release, did not publish through the `pypi` job. Trusted Publishing
+for a project that does not exist yet needs a pending publisher, and pypi.org asks for the
+account password before it adds one, so none was registered and the job failed at the
+token exchange (`invalid-publisher`). The release's own sdist and wheel were then uploaded
+with twine and the maintainer's PyPI API token, after the checks the job makes (each
+file's `.sha256` asset and `gh attestation verify`). PyPI's 0.4.0 files are byte-identical
+to the release's assets but have no PEP 740 attestations (PyPI accepts attestations only
+with a Trusted Publishing upload), so check them against the GitHub Release
+([Verifying a release](#verifying-a-release)), not with `pypi-attestations`. That run's
+`pypi` job stays failed. Do not re-run it: `pypi-plan` would skip both files and
+`pypi-verify` would time out waiting for attestations.
+
+Now that the project exists, its owner adds the publisher on the project itself, signed in
+to pypi.org, at <https://pypi.org/manage/project/store-release/settings/publishing/>, with
+the values in [the table above](#the-trusted-publisher). From then on, each release
+publishes through the `pypi` job, with its attestations.
 
 ## When the Release run fails
 
