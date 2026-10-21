@@ -35,8 +35,11 @@ Dependabot bumps ship as patches: an action bump has Impact `release-path` or
 `validation` depending on which jobs use the action, a runtime lock bump
 (`requirements.txt`) `release-path`, a `requirements-checks.txt` or `requirements-dist.txt`
 bump `checks-only` (the dist lock builds store-release's own sdist and wheel; apps never
-install it). A major version of a runtime dependency also moves the cap of its extra in
-`pyproject.toml`, whose floor is the locked version (`tests/unit/test_packaging.py`).
+install it). Each extra in `pyproject.toml` allows one major version and must hold the
+locked version (`tests/unit/test_packaging.py`): a runtime lock bump within the major
+leaves `pyproject.toml` as it is (Dependabot widens a range only when the new version falls
+outside it), and a new major fails that test until its extra's floor moves to the new lock
+and its cap past it.
 Dependabot waits seven days after a release before proposing it (security updates
 are not delayed), and its grouped PR moves every file that pins an action at once,
 which is what `test (strict)` requires: one pin per action everywhere. A new
@@ -165,11 +168,17 @@ the first upload) at <https://pypi.org/manage/account/publishing/>, and keep it 
 | Workflow name | `release.yml` |
 | Environment name | `pypi` |
 
+A pending publisher does not reserve the name: until the first upload creates the project,
+anyone can register `store-release` on PyPI (the pending publisher then stops working), so
+run that first release soon after adding it.
+
 `pypi-verify` warns when PyPI's attestations name no environment: the publisher was
 registered without `pypi`, so any job of `release.yml` could publish; add the environment
-on PyPI. GitHub creates the `pypi` environment on the job's first run. Restrict it to `main`
-(Settings, Environments, `pypi`, Deployment branches and tags: Selected branches, `main`),
-so no other branch's run of `release.yml` can deploy to it:
+on PyPI. Restrict the `pypi` environment to `main` (Settings, Environments, `pypi`,
+Deployment branches and tags: Selected branches, `main`), so no other branch's run of
+`release.yml` can deploy to it. Do it before the first PyPI release: otherwise GitHub
+creates the environment, unrestricted, on the job's first run. The `PUT` creates it when it
+does not exist yet:
 
 ```bash
 gh api -X PUT repos/apoorvdarshan/store-release/environments/pypi \

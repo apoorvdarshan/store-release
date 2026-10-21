@@ -36,13 +36,15 @@ classifiers = [
     "Topic :: System :: Software Distribution",
 ]
 # None: init, callers render and the config, caller, pins and paths commands need only the
-# standard library. Each extra adds what one group of commands imports; its floor is the
-# version requirements.txt or requirements-checks.txt locks (tests/unit/test_dists.py keeps
-# them in step).
+# standard library. Each extra adds what one group of commands imports (smoke imports them
+# all: [all]). Each range is >=<floor>,<<the floor's next major> and holds the version
+# requirements.in or requirements-checks.in locks, the one CI tests: Dependabot moves the
+# lock within the major and leaves the range; a new major moves the floor and the cap
+# (tests/unit/test_packaging.py).
 dependencies = []
 
 [project.optional-dependencies]
-# App Store Connect: the API key's ES256 token (ios store-step, wait-build, plan, smoke).
+# App Store Connect: the API key's ES256 token (ios store-step, wait-build, plan).
 ios = ["PyJWT[crypto]>=2.15.1,<3"]
 # Google Play: the Android Publisher API (android play-listing, plan).
 android = ["google-api-python-client>=2.201.0,<3", "google-auth>=2.62.0,<3"]

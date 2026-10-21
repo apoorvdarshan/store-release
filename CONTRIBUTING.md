@@ -77,9 +77,11 @@ Play and GitHub.
   service-account JSON or tokens, not even expired ones.
 - **Pins.** Third-party actions are pinned by full commit SHA with a `# vX.Y.Z` comment,
   with the same pin for an action in every file (a test enforces it). Python dependencies
-  are pinned by hash (`pip-compile --generate-hashes`, pip-tools 7.6.2, Python 3.13). The
-  package's extras in `pyproject.toml` take the versions `requirements.in` and
-  `requirements-checks.in` pin as their floors (a test enforces it).
+  are pinned by hash (`pip-compile --generate-hashes`, pip-tools 7.6.2, Python 3.13). Each
+  of the package's extras in `pyproject.toml` allows one major version, `>=<floor>,<<next
+  major>`, and must hold the version `requirements.in` or `requirements-checks.in` pins (a
+  test enforces it): a Dependabot bump within the major leaves `pyproject.toml` alone, and
+  a new major moves the floor to the new lock and the cap past it.
 - **Permissions.** Every job declares its `permissions`, and the rendered callers do too;
   expressions reach shell only through `env:` (tests enforce both).
 - **Commits** say what changed and why in plain words. By contributing you agree that your

@@ -5,6 +5,7 @@ Standard library only: hatchling is stubbed and PyPI is faked, and nothing is bu
 the sdist and the wheel and runs the wheel alone on every supported Python (scripts/dists.py check)."""
 from __future__ import annotations
 
+import ast
 import contextlib
 import email.message
 import hashlib
@@ -24,7 +25,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
-from store_release import __version__, cli, scaffold, selftest
+from store_release import __version__, cli, scaffold, selftest, smoke
 from support import apps as support_apps
 
 TOOL_ROOT = Path(__file__).resolve().parents[2]
@@ -82,6 +83,40 @@ def version_tuple(text: str) -> tuple[int, ...]:
     return tuple(int(part) for part in text.split("."))
 
 
+def extra_problems(extras: dict[str, list[str]], locked: dict[str, tuple[str, str]]) -> list[str]:
+    """The extras rule: each locked runtime dependency is in exactly one extra, with the lock's own extras, as
+    >=<floor>,<<the floor's next major>, a range that holds the locked version (the one CI tests). Dependabot then
+    moves the lock within the major and leaves the range alone; a new major needs its floor and cap moved."""
+    problems: list[str] = []
+    found: dict[str, str] = {}
+    for extra, requirements in sorted(extras.items()):
+        if extra == "all":
+            continue
+        for requirement in requirements:
+            match = RANGE.fullmatch(requirement)
+            if match is None:
+                problems.append(f"[{extra}] {requirement}: write >=<floor>,<<the floor's next major>")
+                continue
+            name = normalized(match[1])
+            if name not in locked:
+                problems.append(f"[{extra}] {requirement}: not in requirements.in or requirements-checks.in")
+                continue
+            if name in found:
+                problems.append(f"[{extra}] {requirement}: {name} is in [{found[name]}] too")
+            found[name] = extra
+            lock_extras, pinned = locked[name]
+            if (match[2] or "") != lock_extras:
+                problems.append(f"[{extra}] {requirement}: the lock installs {name}{lock_extras}")
+            floor, cap = version_tuple(match[3]), int(match[4])
+            if cap != floor[0] + 1:
+                problems.append(f"[{extra}] {requirement}: the cap is not the floor's next major")
+            if not floor <= version_tuple(pinned) < (cap,):
+                problems.append(f"[{extra}] {requirement}: the lock pins {pinned}, outside the range (a new "
+                                "major: move the floor to it and the cap past it)")
+    problems.extend(f"{name}: locked, but in no extra" for name in sorted(set(locked) - set(found)))
+    return problems
+
+
 class PyprojectTests(unittest.TestCase):
     def test_the_project(self) -> None:
         self.assertEqual(PROJECT["name"], "store-release")
@@ -117,29 +152,42 @@ class PyprojectTests(unittest.TestCase):
         ruff = (TOOL_ROOT / "ruff.toml").read_text(encoding="utf-8")
         self.assertIn(f'target-version = "py3{floor[1]}"', ruff)
 
-    def test_the_extras_mirror_the_locks(self) -> None:
+    def test_each_extra_holds_the_locked_version(self) -> None:
         extras = PROJECT["optional-dependencies"]
         self.assertEqual(sorted(extras), ["all", "android", "checks", "images", "ios"])
-        locked = top_level_pins("requirements.in", "requirements-checks.in")
-        found: dict[str, str] = {}
-        for extra, requirements in extras.items():
-            if extra == "all":
-                continue
-            for requirement in requirements:
-                match = RANGE.fullmatch(requirement)
-                self.assertIsNotNone(match, f"[{extra}] {requirement}: write >=<locked>,<<next major>")
-                name = normalized(match[1])
-                with self.subTest(requirement=requirement):
-                    self.assertIn(name, locked, f"{requirement} is not in requirements.in or requirements-checks.in")
-                    self.assertNotIn(name, found, f"{name} is in [{found.get(name)}] and [{extra}]")
-                    found[name] = extra
-                    self.assertEqual(match[2] or "", locked[name][0])
-                    self.assertEqual(match[3], locked[name][1], "the floor is the locked version")
-                    self.assertEqual(int(match[4]), version_tuple(locked[name][1])[0] + 1, "the cap is the next major")
-        self.assertEqual(sorted(found), sorted(locked), "every locked runtime dependency is in one extra")
+        self.assertEqual(extra_problems(extras, top_level_pins("requirements.in", "requirements-checks.in")), [])
         everything = re.fullmatch(r"store-release\[([a-z,]+)\]", extras["all"][0])
         self.assertEqual(len(extras["all"]), 1)
         self.assertEqual(sorted(everything[1].split(",")), sorted(set(extras) - {"all"}))
+
+    def test_the_extras_rule_takes_dependabots_lock_bumps(self) -> None:
+        """Dependabot treats pyproject.toml as a library's (it has a name and a description), so it widens a range
+        only when the new version falls outside it: a lock bump within the major leaves the extra as it is."""
+        extras = {"ios": ["PyJWT[crypto]>=2.15.1,<3"], "all": ["store-release[ios]"]}
+        self.assertEqual(extra_problems(extras, {"pyjwt": ("[crypto]", "2.15.1")}), [])
+        self.assertEqual(extra_problems(extras, {"pyjwt": ("[crypto]", "2.16.0")}), [])
+        # A new major: Dependabot moves the cap to <4 and keeps the floor, which must move too.
+        self.assertEqual(extra_problems({"ios": ["PyJWT[crypto]>=2.15.1,<4"]}, {"pyjwt": ("[crypto]", "3.0.0")}),
+                         ["[ios] PyJWT[crypto]>=2.15.1,<4: the cap is not the floor's next major"])
+        self.assertEqual(extra_problems(extras, {"pyjwt": ("[crypto]", "3.0.0")}),
+                         ["[ios] PyJWT[crypto]>=2.15.1,<3: the lock pins 3.0.0, outside the range (a new major: "
+                          "move the floor to it and the cap past it)"])
+        self.assertEqual(extra_problems({"ios": ["PyJWT[crypto]>=3.0.0,<4"]}, {"pyjwt": ("[crypto]", "3.0.0")}), [])
+        cases = {
+            "floor above the lock": ({"ios": ["PyJWT[crypto]>=2.16.0,<3"]}, {"pyjwt": ("[crypto]", "2.15.1")},
+                                     "the lock pins 2.15.1, outside the range"),
+            "not a range": ({"ios": ["PyJWT[crypto]==2.15.1"]}, {"pyjwt": ("[crypto]", "2.15.1")}, "write >="),
+            "the lock's extras": ({"ios": ["PyJWT>=2.15.1,<3"]}, {"pyjwt": ("[crypto]", "2.15.1")},
+                                  "the lock installs pyjwt[crypto]"),
+            "not locked": ({"images": ["Pillow>=13.0.0,<14"]}, {}, "not in requirements.in"),
+            "in two extras": ({"a": ["PyYAML>=6.0.3,<7"], "b": ["PyYAML>=6.0.3,<7"]}, {"pyyaml": ("", "6.0.3")},
+                              "pyyaml is in [a] too"),
+            "in no extra": ({}, {"pyyaml": ("", "6.0.3")}, "pyyaml: locked, but in no extra"),
+        }
+        for label, (case, locked, problem) in cases.items():
+            with self.subTest(case=label):
+                problems = extra_problems(case, locked)
+                self.assertTrue(any(problem in found for found in problems), problems)
 
     def test_the_build_tools_are_hash_locked(self) -> None:
         self.assertEqual(PYPROJECT["build-system"], {"requires": ["hatchling>=1.27.0"],
@@ -278,6 +326,19 @@ class FakeGh:
         if args[0] == "api" and args[1].endswith("/git/ref/tags/v1.2.3"):
             return self.tagged + "\n"
         raise AssertionError(args)
+
+
+class ChangingGh(FakeGh):
+    """FakeGh whose `release view` answers each of states in turn, then the last one."""
+
+    def __init__(self, states: list[dict]) -> None:
+        super().__init__(states[0])
+        self.states = list(states)
+
+    def __call__(self, args: list[str]) -> str:
+        if args[:2] == ["release", "view"]:
+            self.release = self.states.pop(0) if len(self.states) > 1 else self.states[0]
+        return super().__call__(args)
 
 
 class DistsTests(unittest.TestCase):
@@ -472,11 +533,28 @@ class DistsTests(unittest.TestCase):
             with self.subTest(case=label), self.assertRaisesRegex(dists.DistError, error):
                 self.release_check(gh)
 
+    def test_a_release_not_complete_yet_is_checked_again(self) -> None:
+        """Right after `gh release create`, GitHub may still show a draft, a mutable release or missing assets."""
+        states = [self.release(isDraft=True), self.release(isImmutable=False), self.release(assets=[]), self.release()]
+        slept, out = self.release_check(ChangingGh(states))
+        self.assertEqual(slept, [dists.GH_INTERVAL] * 3)
+        self.assertIn("v1.2.3 is not a published, immutable release (isDraft=True, isImmutable=True); trying again",
+                      out)
+        self.assertIn("are not this run's file (missing, or another SHA-256); trying again", out)
+        self.assertIn(f"v1.2.3 is published and immutable on {SHA}, with exactly these 2 files", out)
+        # What stays wrong fails once the attempts are spent.
+        gh = FakeGh(self.release(isImmutable=False))
+        slept = []
+        with redirect_stdout(io.StringIO()), self.assertRaisesRegex(dists.DistError, "isImmutable=False"):
+            dists.release_check(self.dist, "1.2.3", sha=SHA, repository="owner/store-release", gh=gh, attempts=3,
+                                interval=5, sleep=slept.append)
+        self.assertEqual((slept, len(gh.calls)), ([5, 5], 6))
+
     def test_reading_the_release_is_retried(self) -> None:
         slept, _ = self.release_check(FakeGh(self.release(), failures=2))
         self.assertEqual(slept, [dists.GH_INTERVAL, dists.GH_INTERVAL])
         with self.assertRaisesRegex(dists.DistError, r"cannot read the GitHub Release v1.2.3 \(gh release view failed: "
-                                                     "release not found\)"):
+                                                     r"release not found\)"):
             self.release_check(FakeGh(None))
         for kwargs, error in (({"sha": "abc"}, "is not a full commit SHA"), ({"repository": "nope"}, "is not owner/name")):
             with self.subTest(**kwargs), self.assertRaisesRegex(dists.DistError, error):
@@ -571,6 +649,34 @@ class InstalledCommandTests(unittest.TestCase):
                                capture_output=True, text=True)
         self.assertEqual(usage.returncode, 2)
         self.assertIn("usage: python3 -m store_release [--app-root DIR]", usage.stderr)
+
+    def test_a_missing_extra_is_named_instead_of_a_traceback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(sys.modules, {"jwt": None}):
+            code, out, err = run_installed(["smoke"], Path(tmp))
+            self.assertEqual((code, out), (1, ""))
+            self.assertEqual(err, 'error: this command needs the ios extra (jwt is not installed): install '
+                                  '"store-release[ios]", or "store-release[all]" for every command\n')
+            code, _, err = run_installed(["smoke"], Path(tmp), prog=cli.RUN_PY)
+            self.assertEqual(code, 1)
+            self.assertEqual(err, "error: this command needs jwt, which is not installed: install the hash-locked "
+                                  "requirements.txt and requirements-checks.txt\n")
+        # Any other missing module is a bug, not a missing extra: it is not hidden.
+        missing = ModuleNotFoundError("No module named 'store_release.nope'", name="store_release.nope")
+        with mock.patch.object(smoke, "main", side_effect=missing), self.assertRaises(ModuleNotFoundError):
+            run_installed(["smoke"], TOOL_ROOT)
+
+    def test_every_third_party_module_names_its_extra(self) -> None:
+        """cli.EXTRAS covers each third-party module the package imports, with an extra pyproject.toml has."""
+        imported = set()
+        for path in (TOOL_ROOT / "store_release").rglob("*.py"):
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"), filename=str(path))):
+                if isinstance(node, ast.Import):
+                    imported |= {alias.name.partition(".")[0] for alias in node.names}
+                elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                    imported.add(node.module.partition(".")[0])
+        third_party = imported - set(sys.stdlib_module_names) - {"store_release"}
+        self.assertEqual(sorted(cli.EXTRAS), sorted(third_party))
+        self.assertLessEqual(set(cli.EXTRAS.values()), set(PROJECT["optional-dependencies"]) - {"all"})
 
     def test_selftest_needs_a_checkout(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(selftest, "TOOL_ROOT", Path(tmp)), \

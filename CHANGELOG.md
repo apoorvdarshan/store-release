@@ -23,9 +23,10 @@ workflows never install the package.
   directory (`run.py` still requires the flag). `init`, `callers render` and the config,
   caller and pins checks need only the standard library; the extras `ios` (PyJWT),
   `android` (the Google API client), `images` (Pillow), `checks` (PyYAML) and `all` add the
-  rest, with the versions `requirements.txt` and `requirements-checks.txt` lock as their
-  floors. The PyPI description is the README with its links pointed at the release tag
-  (`hatch_build.py`).
+  rest, each allowing one major version that holds the version `requirements.in` or
+  `requirements-checks.in` locks (Dependabot's lock bumps within it leave `pyproject.toml`
+  alone). A command that needs a missing extra says which one to install. The PyPI
+  description is the README with its links pointed at the release tag (`hatch_build.py`).
 - `release.yml` builds the sdist and the wheel in a `dists` job without write access or an
   OIDC token (`scripts/dists.py`, with hatchling, build and twine hash-locked in
   `requirements-dist.txt`), signs and attests them with the source archive and attaches them
@@ -38,19 +39,22 @@ workflows never install the package.
 - CI's `package` job, a new required check (`scripts/release_check.py`): it builds the sdist
   and the wheel, runs `twine check --strict`, checks their files and metadata, and runs the
   wheel alone in a new environment on Python 3.11 to 3.15 (`--help`, `--version`,
-  `python -m store_release`, every module importing, and `init` writing exactly the
-  templates).
+  `python -m store_release`, every module importing, `smoke` naming the extra it lacks, and
+  `init` writing exactly the templates).
 
 ### Changed
 
 - The CLI's usage names how it was started (`run.py`, `store-release` or
   `python3 -m store_release`) and lists the global options; an unknown command is a usage
   error before anything reads the app; `init`'s next steps spell the command the same way;
-  and `selftest` outside a store-release checkout says the tests are not in the package.
+  `selftest` outside a store-release checkout says the tests are not in the package; and a
+  missing PyJWT, Google API client, Pillow or PyYAML is an `error:` line that names the
+  extra (or, through `run.py`, the locks) instead of a traceback.
 - The `release` job accepts a release that `gh release create` reported as failed only when
   it is published, immutable, tagged on the run's commit and carries exactly the run's files
   (`scripts/dists.py release-check`, which also replaces the tag check after a successful
-  call), so the PyPI step still runs for a release GitHub published anyway.
+  call, and reads and checks the release again for up to a minute before failing), so the
+  PyPI step still runs for a release GitHub published anyway.
 - The lint targets Python 3.11, the package's floor (`ruff.toml`).
 
 ## [0.3.0] - 2026-10-21

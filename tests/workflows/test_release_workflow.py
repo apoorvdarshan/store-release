@@ -50,7 +50,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertEqual(self.data["permissions"], {"contents": "read"})
         self.assertEqual(self.data["concurrency"], {"group": "release", "cancel-in-progress": False})
         self.assertEqual(list(self.jobs), ["dists", "release", "pypi"])
-        self.assertEqual((self.jobs["dists"]["if"], self.jobs["release"]["if"]), (MAIN_ONLY, MAIN_ONLY))
+        self.assertEqual([job["if"] for job in self.jobs.values()], [MAIN_ONLY] * 3)
         self.assertEqual((self.jobs["release"]["needs"], self.jobs["pypi"]["needs"]), ("dists", "release"))
 
     def test_each_job_has_only_the_permissions_it_needs(self) -> None:

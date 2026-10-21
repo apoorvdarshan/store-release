@@ -19,14 +19,16 @@ check        `twine check --strict`; the sdist and the wheel hold exactly the ex
              one), a new virtual environment gets the wheel alone (no dependencies, no index),
              and from empty directories outside the checkout: `store-release --version` and
              `--help`, `python -m store_release --version`, every module imports, `selftest`
-             refuses, and `store-release init` (no --app-root: the current directory) writes
+             refuses, `smoke` names the extra it lacks (an `error:` line, not a traceback),
+             and `store-release init` (no --app-root: the current directory) writes
              exactly examples/templates/<template>/ for each template, which `config check`
              then loads.
 release-check
              (release.yml, with gh and GH_TOKEN) the GitHub Release vX.Y.Z is published and
              immutable, its tag is --sha, and each file in DIR is one of its assets with the
-             same SHA-256; with --complete, its assets are exactly DIR's files. Reading the
-             release is retried, since it may run right after `gh release create` failed.
+             same SHA-256; with --complete, its assets are exactly DIR's files. The release is
+             read and checked again for a minute before that fails, since it may run right
+             after `gh release create`.
 pypi-plan    (release.yml, before the upload) compares DIR's two files with what PyPI lists for
              the version. A file PyPI has with the same SHA-256 is already published and is
              skipped; one with another digest, or a file of the version that this release did not
@@ -331,6 +333,12 @@ def smoke(python: str, wheel: Path, version: str) -> None:
         if refused.returncode != 2 or "installed package" not in refused.stderr:
             raise DistError(f"python {label}: selftest without the tests exited {refused.returncode}: "
                             f"{refused.stderr.strip()}")
+        # The wheel alone has no extras: a command that needs one says which, without a traceback.
+        lacking = cli("smoke", check=False)
+        if lacking.returncode != 1 or not lacking.stderr.startswith("error: this command needs the ios extra") \
+                or "Traceback" in lacking.stderr:
+            raise DistError(f"python {label}: smoke without the extras exited {lacking.returncode}: "
+                            f"{lacking.stderr.strip()}")
         answers = json.loads(run([vpython, "-I", "-c", TEMPLATE_ANSWERS], cwd=work, env=env).stdout)
         if sorted(answers["templates"]) != sorted(p.name for p in TEMPLATES.iterdir() if p.is_dir()):
             raise DistError(f"python {label}: the package's templates are not examples/templates/'s")
@@ -350,7 +358,8 @@ def smoke(python: str, wheel: Path, version: str) -> None:
             if "store/store-release.toml: schema 1, Example App" not in checked:
                 raise DistError(f"python {label}: config check on init's {name} app printed {checked!r}")
         print(f"python {label}: the wheel alone runs --version, --help and python -m, imports its {modules} "
-              f"modules, refuses selftest, and init writes the {len(answers['templates'])} templates")
+              f"modules, refuses selftest, names the extra smoke lacks, and init writes the "
+              f"{len(answers['templates'])} templates")
 
 
 def check(dist_dir: Path, pythons: list[str], *, root: Path = ROOT) -> None:
@@ -378,6 +387,27 @@ def run_gh(args: list[str]) -> str:
     return result.stdout
 
 
+def release_problem(release: object, tagged: str, files: dict[str, str], *, tag: str, sha: str,
+                    complete: bool) -> str | None:
+    """Why the release read is not tag, published, immutable, on sha and carrying files; None when it is."""
+    if not isinstance(release, dict):
+        return f"gh release view {tag} returned {type(release).__name__}, not an object"
+    if release.get("isDraft") is not False or release.get("isImmutable") is not True:
+        return (f"{tag} is not a published, immutable release (isDraft={release.get('isDraft')}, "
+                f"isImmutable={release.get('isImmutable')})")
+    if tagged != sha:
+        return f"{tag} points at {tagged or 'nothing'}, not {sha}"
+    assets = {asset.get("name"): asset.get("digest") for asset in release.get("assets") or []
+              if isinstance(asset, dict)}
+    differ = sorted(name for name, digest in files.items() if assets.get(name) != digest)
+    if differ:
+        return (f"{tag}'s {', '.join(differ)} {'is' if len(differ) == 1 else 'are'} not this run's file "
+                "(missing, or another SHA-256)")
+    if complete and set(assets) != set(files):
+        return f"{tag} carries other assets than this run's: {sorted(set(assets) - set(files))}"
+    return None
+
+
 def release_check(dist_dir: Path, version: str, *, sha: str, repository: str, complete: bool = False,
                   gh: Gh = run_gh, attempts: int = GH_ATTEMPTS, interval: float = GH_INTERVAL,
                   sleep: Callable[[float], None] = time.sleep) -> None:
@@ -392,28 +422,23 @@ def release_check(dist_dir: Path, version: str, *, sha: str, repository: str, co
     if not files:
         raise DistError(f"{dist_dir} has no files to compare")
     tag = f"v{version}"
-    for attempt in range(1, attempts + 1):
+    # Read and checked again for a minute: right after `gh release create`, GitHub may not show
+    # the release, its tag or its assets as complete yet, and a false failure here would leave
+    # the version off PyPI for good (the release job cannot run again for an existing tag).
+    for attempt in range(1, max(attempts, 1) + 1):
         try:
             release = json.loads(gh(["release", "view", tag, "--repo", repository, "--json", "isDraft,isImmutable,assets"]))
             tagged = gh(["api", f"repos/{repository}/git/ref/tags/{tag}", "--jq", ".object.sha"]).strip()
-            break
         except (GhError, ValueError) as exc:
-            if attempt == attempts:
-                raise DistError(f"cannot read the GitHub Release {tag} ({exc})") from None
-            print(f"cannot read the GitHub Release {tag} yet ({exc}); trying again")
-            sleep(interval)
-    if release.get("isDraft") is not False or release.get("isImmutable") is not True:
-        raise DistError(f"{tag} is not a published, immutable release (isDraft={release.get('isDraft')}, "
-                        f"isImmutable={release.get('isImmutable')})")
-    if tagged != sha:
-        raise DistError(f"{tag} points at {tagged or 'nothing'}, not {sha}")
-    assets = {asset.get("name"): asset.get("digest") for asset in release.get("assets") or []}
-    differ = sorted(name for name, digest in files.items() if assets.get(name) != digest)
-    if differ:
-        raise DistError(f"{tag}'s {', '.join(differ)} {'is' if len(differ) == 1 else 'are'} not this run's file "
-                        "(missing, or another SHA-256)")
-    if complete and set(assets) != set(files):
-        raise DistError(f"{tag} carries other assets than this run's: {sorted(set(assets) - set(files))}")
+            problem = f"cannot read the GitHub Release {tag} ({exc})"
+        else:
+            problem = release_problem(release, tagged, files, tag=tag, sha=sha, complete=complete)
+            if problem is None:
+                break
+        if attempt >= attempts:
+            raise DistError(problem)
+        print(f"{problem}; trying again")
+        sleep(interval)
     print(f"{tag} is published and immutable on {sha}, with {'exactly ' if complete else ''}these "
           f"{len(files)} files: {', '.join(files)}")
 

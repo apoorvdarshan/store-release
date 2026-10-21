@@ -193,6 +193,7 @@ jobs:
   # store-release names this repository, release.yml and the `pypi` environment.
   pypi:
     needs: release
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment:

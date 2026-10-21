@@ -32,6 +32,9 @@ MODULE = "python3 -m store_release"
 COMMANDS = ("init", "selftest", "tool", "config", "paths", "stage", "secrets", "caller", "callers", "pins", "yanked",
             "print-switches", "release-notes", "catalog", "revenuecat-gate", "listing", "whats-new", "screenshots",
             "hooks", "github", "smoke", "ios", "android", "canary")
+# The pyproject.toml extra that installs each third-party module a command imports (smoke imports them all).
+EXTRAS = {"jwt": "ios", "cryptography": "ios", "googleapiclient": "android", "google": "android", "PIL": "images",
+          "yaml": "checks"}
 
 USAGE = """usage: {prog} [--app-root DIR] [--config PATH] <command> [args...]
 
@@ -590,6 +593,18 @@ def main(argv: list[str] | None = None, *, prog: str = RUN_PY) -> int:
         return 2
     except (ConfigError, StageError, HookError, GithubError, ArchiveError, YankedError) as exc:
         print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except ModuleNotFoundError as exc:
+        # A command's third-party module that is not installed; any other missing module is a bug.
+        extra = EXTRAS.get((exc.name or "").partition(".")[0])
+        if extra is None:
+            raise
+        if prog == RUN_PY:
+            print(f"error: this command needs {exc.name}, which is not installed: install the hash-locked "
+                  "requirements.txt and requirements-checks.txt", file=sys.stderr)
+        else:
+            print(f"error: this command needs the {extra} extra ({exc.name} is not installed): install "
+                  f'"store-release[{extra}]", or "store-release[all]" for every command', file=sys.stderr)
         return 1
 
 
