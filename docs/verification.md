@@ -1,15 +1,16 @@
 # Verifying downloads
 
-Three kinds of files are signed: store-release's own release assets, the Android files an
-app's GitHub Release carries, and, when an app turns it on, the source archive of an iOS
-release. All of them are signed keylessly with [Sigstore](https://www.sigstore.dev/)
+Three kinds of files are signed: store-release's own release assets (and its PyPI files,
+which are the same sdist and wheel), the Android files an app's GitHub Release carries, and,
+when an app turns it on, the source archive of an iOS release. All of them are signed keylessly with [Sigstore](https://www.sigstore.dev/)
 (`cosign`) and carry a SLSA build provenance attestation that `gh attestation verify`
 checks.
 
 ## store-release's own releases
 
-Each `vX.Y.Z` release attaches four files, made by store-release's
-[`release.yml`](../.github/workflows/release.yml) from the tagged commit:
+Each `vX.Y.Z` release attaches eleven files, made by store-release's
+[`release.yml`](../.github/workflows/release.yml) from the tagged commit (v0.3.0 and
+earlier: the first four only):
 
 | File | What it is |
 |---|---|
@@ -17,6 +18,13 @@ Each `vX.Y.Z` release attaches four files, made by store-release's
 | `store-release-X.Y.Z-source.tar.gz.sha256` | its SHA-256 |
 | `store-release-X.Y.Z-source.tar.gz.sigstore.json` | the cosign keyless signature bundle |
 | `store-release-X.Y.Z-source.tar.gz.intoto.jsonl` | the SLSA build provenance attestation (also stored by GitHub) |
+| `store_release-X.Y.Z.tar.gz` | the sdist, the file PyPI also has |
+| `store_release-X.Y.Z.tar.gz.sha256` | its SHA-256 |
+| `store_release-X.Y.Z.tar.gz.sigstore.json` | its cosign keyless signature bundle |
+| `store_release-X.Y.Z-py3-none-any.whl` | the wheel, the file PyPI also has |
+| `store_release-X.Y.Z-py3-none-any.whl.sha256` | its SHA-256 |
+| `store_release-X.Y.Z-py3-none-any.whl.sigstore.json` | its cosign keyless signature bundle |
+| `store_release-X.Y.Z.intoto.jsonl` | the SLSA build provenance attestation of the sdist and the wheel |
 
 ```bash
 v=0.3.0   # the release to check
@@ -32,6 +40,34 @@ gh attestation verify "store-release-$v-source.tar.gz" --repo apoorvdarshan/stor
 gh attestation verify "store-release-$v-source.tar.gz" --repo apoorvdarshan/store-release \
   --bundle "store-release-$v-source.tar.gz.intoto.jsonl"
 ```
+
+The sdist and the wheel check the same way: replace `store-release-$v-source.tar.gz` with
+`store_release-$v.tar.gz` or `store_release-$v-py3-none-any.whl`, and use
+`store_release-$v.intoto.jsonl` as the offline bundle. `--source-digest <tagged commit>`
+also pins the commit they were built from.
+
+### From PyPI
+
+PyPI's `store-release` files are the release's sdist and wheel: the Release workflow
+uploads exactly the attached files, through Trusted Publishing, with PEP 740 attestations
+signed by the same workflow identity. Check either way:
+
+```bash
+v=X.Y.Z   # a release after v0.3.0
+# PyPI serves the release's own files (run where the release's files were downloaded):
+curl -s "https://pypi.org/pypi/store-release/$v/json" \
+  | python3 -c 'import json, sys; [print(f["digests"]["sha256"] + "  " + f["filename"]) for f in json.load(sys.stdin)["urls"]]' \
+  | sha256sum -c -
+# PyPI's attestations name this repository's release.yml:
+python3 -m pip install pypi-attestations
+pypi-attestations verify pypi --repository https://github.com/apoorvdarshan/store-release \
+  "pypi:store_release-$v-py3-none-any.whl"
+```
+
+To install exactly the release's wheel, install the file you checked
+(`pipx install ./store_release-$v-py3-none-any.whl`), or pin its SHA-256 in a requirements
+file (`store-release==X.Y.Z --hash=sha256:<digest>`) and install it with
+`pip install --require-hashes -r <file>`.
 
 On macOS use `shasum -a 256 -c` for the checksum. Without cosign, the Python
 [sigstore](https://pypi.org/project/sigstore/) client checks the same bundle:

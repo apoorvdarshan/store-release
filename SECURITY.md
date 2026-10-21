@@ -29,7 +29,8 @@ it fail their checks until they update.
 ## Scope
 
 In scope: this repository, that is the reusable workflows, the `job-setup` action, the
-`store_release` package, `run.py` and the release workflow. For example:
+`store_release` package (also on PyPI as `store-release`), `run.py` and the release
+workflow. For example:
 
 - a way for workflow inputs, app files or store responses to run commands, change
   what is uploaded or reach a secret

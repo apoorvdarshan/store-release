@@ -20,7 +20,8 @@ updates:
     commit-message:
       prefix: "CI"
   - package-ecosystem: pip
-    # / holds the store, checks and lint locks; /fuzz the Atheris lock.
+    # / holds the store, checks, lint and dist locks and pyproject.toml (the package's
+    # extras and build backend); /fuzz the Atheris lock.
     directories: ["/", "/fuzz"]
     schedule:
       interval: weekly
