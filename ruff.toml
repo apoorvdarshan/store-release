@@ -1,7 +1,8 @@
 # Python lint for store-release's own code (the lint CI job). Syntax errors and
 # pyflakes rules only; formatting is left alone. The vendored fud-ai scripts are
 # verbatim copies and are not linted.
-target-version = "py313"
+# The floor of pyproject.toml's requires-python, so syntax a supported Python lacks fails the lint.
+target-version = "py311"
 extend-exclude = ["tests/parity/upstream_*"]
 
 [lint]

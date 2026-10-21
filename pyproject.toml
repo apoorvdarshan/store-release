@@ -1,0 +1,75 @@
+# The store-release package on PyPI (`pipx install store-release`): the `store-release`
+# command, the same CLI as run.py. The reusable workflows never install it: they check out
+# store-release at the pinned commit and run run.py with the hash-locked requirements*.txt.
+# Build and check the sdist and wheel as CI and release.yml do (docs/release-process.md):
+#   python3 -m pip install --require-hashes -r requirements-dist.txt
+#   python3 -I scripts/dists.py build --out dist && python3 -I scripts/dists.py check dist
+[build-system]
+# 1.27 writes PEP 639 license metadata; requirements-dist.txt locks the version CI and releases use.
+requires = ["hatchling>=1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "store-release"
+description = "Release iOS and Android apps to App Store Connect and Google Play from a git tag, with reusable GitHub Actions workflows"
+# version: store_release.__version__; readme: README.md, its relative links pointed at the release tag (hatch_build.py).
+dynamic = ["version", "readme"]
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+authors = [{ name = "Apoorv Darshan" }]
+keywords = ["app-store-connect", "google-play", "github-actions", "ios", "android", "release-automation", "ci"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
+    "Topic :: Software Development :: Build Tools",
+    "Topic :: System :: Software Distribution",
+]
+# None: init, callers render and the config, caller, pins and paths commands need only the
+# standard library. Each extra adds what one group of commands imports; its floor is the
+# version requirements.txt or requirements-checks.txt locks (tests/unit/test_dists.py keeps
+# them in step).
+dependencies = []
+
+[project.optional-dependencies]
+# App Store Connect: the API key's ES256 token (ios store-step, wait-build, plan, smoke).
+ios = ["PyJWT[crypto]>=2.15.1,<3"]
+# Google Play: the Android Publisher API (android play-listing, plan).
+android = ["google-api-python-client>=2.201.0,<3", "google-auth>=2.62.0,<3"]
+# Screenshots and product page images: staging and size checks (screenshots stage).
+images = ["Pillow>=13.0.0,<14"]
+# Pull request checks: caller check --pr parses the callers.
+checks = ["PyYAML>=6.0.3,<7"]
+all = ["store-release[ios,android,images,checks]"]
+
+[project.scripts]
+store-release = "store_release.cli:console_main"
+
+[project.urls]
+Homepage = "https://github.com/apoorvdarshan/store-release"
+Documentation = "https://github.com/apoorvdarshan/store-release/tree/main/docs"
+Changelog = "https://github.com/apoorvdarshan/store-release/blob/main/CHANGELOG.md"
+Issues = "https://github.com/apoorvdarshan/store-release/issues"
+Source = "https://github.com/apoorvdarshan/store-release"
+
+[tool.hatch.version]
+path = "store_release/__init__.py"
+
+# hatch_build.py: the PyPI description is README.md with its relative links made absolute.
+[tool.hatch.metadata.hooks.custom]
+
+[tool.hatch.build.targets.wheel]
+packages = ["store_release"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/store_release", "/README.md", "/LICENSE", "/CHANGELOG.md", "/hatch_build.py"]

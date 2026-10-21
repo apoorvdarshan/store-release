@@ -107,6 +107,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--strict", action="store_true")
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args(argv)
+    if not (TOOL_ROOT / "run.py").is_file() or not (TESTS / "unit").is_dir():
+        # An installed package (pip, pipx) carries no tests.
+        print("error: selftest runs the tests of a store-release checkout, and this store-release is an installed "
+              "package without them: clone the repository and run `python3 -I -u run.py selftest` there",
+              file=sys.stderr)
+        return 2
     suites = args.suite or ["unit"]
     if args.require_pillow:
         os.environ["STORE_RELEASE_TESTS_NEED_PILLOW"] = "1"

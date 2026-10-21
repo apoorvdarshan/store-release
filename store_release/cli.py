@@ -1,9 +1,12 @@
-"""run.py's command dispatcher.
+"""The command dispatcher of run.py and of the installed `store-release` command.
 
     python3 -I -u .store-release/run.py [--app-root DIR] [--config PATH] <command> [args...]
+    store-release [--app-root DIR] [--config PATH] <command> [args...]
 
---app-root is required by every command that reads the app (it is never the
-tooling checkout); --config defaults to store/store-release.toml under it.
+Through run.py (the reusable workflows), --app-root is required by every command
+that reads the app (it is never the tooling checkout); the installed command
+(pipx install store-release, or python3 -m store_release) defaults it to the
+current directory. --config defaults to store/store-release.toml under it.
 Exit codes: 0 success, 1 a release precondition failed (`error: ...` on
 stderr), 2 a usage error. No command prints a secret value.
 """
@@ -21,7 +24,22 @@ from store_release.config import DEFAULT_CONFIG, STANDARD_FLOW, Config, ConfigEr
 
 TOOL_ROOT = Path(__file__).resolve().parents[1]
 
-USAGE = """usage: run.py [--app-root DIR] [--config PATH] <command> [args...]
+# How the CLI was started: run.py in a store-release checkout, the installed console script, or the module.
+RUN_PY = "run.py"
+CONSOLE = "store-release"
+MODULE = "python3 -m store_release"
+# Every command run() dispatches: an unknown one is a usage error before anything reads the app.
+COMMANDS = ("init", "selftest", "tool", "config", "paths", "stage", "secrets", "caller", "callers", "pins", "yanked",
+            "print-switches", "release-notes", "catalog", "revenuecat-gate", "listing", "whats-new", "screenshots",
+            "hooks", "github", "smoke", "ios", "android", "canary")
+
+USAGE = """usage: {prog} [--app-root DIR] [--config PATH] <command> [args...]
+
+options:
+  --app-root DIR     the app checkout, for every command that reads or writes the app
+                     ({app_root})
+  --config PATH      the app's config, relative to the app root (default: store/store-release.toml)
+  --version          print the store-release version
 
 commands:
   init               scaffold store/store-release.toml and the caller workflows for a new app
@@ -61,6 +79,11 @@ commands:
 """
 
 
+def usage(prog: str = RUN_PY) -> str:
+    app_root = "required" if prog == RUN_PY else "default: the current directory"
+    return USAGE.format(prog=prog, app_root=app_root)
+
+
 class UsageError(Exception):
     pass
 
@@ -75,7 +98,7 @@ def patched_argv(argv: list[str]) -> Iterator[None]:
         sys.argv = saved
 
 
-def split_global(argv: list[str]) -> tuple[Path | None, str, str, list[str]]:
+def split_global(argv: list[str], prog: str = RUN_PY) -> tuple[Path | None, str, str, list[str]]:
     app_root: Path | None = None
     # config export writes STORE_RELEASE_CONFIG, so a job's later steps read the config its caller named.
     config = os.environ.get("STORE_RELEASE_CONFIG") or DEFAULT_CONFIG
@@ -83,7 +106,7 @@ def split_global(argv: list[str]) -> tuple[Path | None, str, str, list[str]]:
     while i < len(argv) and argv[i].startswith("-"):
         option = argv[i]
         if option in ("-h", "--help"):
-            print(USAGE, end="")
+            print(usage(prog), end="")
             raise SystemExit(0)
         if option == "--version":
             print(f"store-release {__version__}")
@@ -207,8 +230,13 @@ def two_words(command: str, rest: list[str], allowed: tuple[str, ...]) -> tuple[
     return rest[0], rest[1:]
 
 
-def run(argv: list[str]) -> int:
-    app_root, config_path, command, rest = split_global(argv)
+def run(argv: list[str], prog: str = RUN_PY) -> int:
+    app_root, config_path, command, rest = split_global(argv, prog)
+    if command not in COMMANDS:
+        raise UsageError(f"unknown command {command!r}")
+    if app_root is None and prog != RUN_PY:
+        # The installed command: the app is where it runs (run.py's cwd may be the tooling checkout).
+        app_root = Path.cwd()
 
     if command == "selftest":
         from store_release import selftest  # noqa: PLC0415
@@ -259,7 +287,9 @@ def run(argv: list[str]) -> int:
     if command == "init":
         from store_release import scaffold  # noqa: PLC0415
 
-        return scaffold.main(app_root, rest, config_path=config_path)
+        # The next steps spell commands the way this one was started.
+        launcher = prog if prog in (CONSOLE, MODULE) else scaffold.RUN_PY_LAUNCHER
+        return scaffold.main(app_root, rest, config_path=config_path, launcher=launcher)
     if command == "callers":
         sub, args = two_words(command, rest, ("render",))
         from store_release import callers  # noqa: PLC0415
@@ -544,7 +574,7 @@ def android_command(app: App, rest: list[str]) -> int:
     raise UsageError(f"unknown android command {sub!r}")
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, *, prog: str = RUN_PY) -> int:
     argv = sys.argv[1:] if argv is None else list(argv)
     from store_release.config import ConfigError  # noqa: PLC0415
     from store_release.github import GithubError  # noqa: PLC0415
@@ -554,10 +584,15 @@ def main(argv: list[str] | None = None) -> int:
     from store_release.yanked import YankedError  # noqa: PLC0415
 
     try:
-        return run(argv)
+        return run(argv, prog)
     except UsageError as exc:
-        print(f"error: {exc}\n\n{USAGE}", file=sys.stderr, end="")
+        print(f"error: {exc}\n\n{usage(prog)}", file=sys.stderr, end="")
         return 2
     except (ConfigError, StageError, HookError, GithubError, ArchiveError, YankedError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
+
+
+def console_main() -> int:
+    """`store-release`, the console script of the installed package (pyproject.toml)."""
+    return main(prog=CONSOLE)

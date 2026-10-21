@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Callable, Mapping, Sequence
 
 ROOT = Path(__file__).resolve().parents[1]
-REQUIRED_CHECKS = ("test (stdlib)", "test (strict)", "test (macos)", "lint", "workflows",
+REQUIRED_CHECKS = ("test (stdlib)", "test (strict)", "test (macos)", "lint", "package", "workflows",
                    "Analyze (python)", "Analyze (actions)")
 # Only GitHub Actions check runs from these workflows count (the required checks are their jobs).
 GITHUB_ACTIONS_APP_ID = 15368

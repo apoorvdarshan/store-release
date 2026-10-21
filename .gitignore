@@ -1,4 +1,7 @@
 __pycache__/
 *.pyc
 .venv/
+.venv-dist/
 .ruff_cache/
+# scripts/dists.py build --out dist
+/dist/

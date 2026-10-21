@@ -1,0 +1,10 @@
+# Build and check store-release's sdist and wheel (CI's package job, release.yml's dists
+# job): the build frontend, the build backend pyproject.toml names, and twine for
+# `twine check --strict`. Install on Python 3.13 with --require-hashes.
+build==1.6.1
+hatchling==1.32.4
+twine==7.0.0
+# keyring, a twine dependency, needs these two on Linux only; they are listed so that a
+# lock compiled on macOS still installs on the Linux runners.
+SecretStorage==3.5.0
+jeepney==0.9.0

@@ -1,6 +1,7 @@
-"""`run.py init`: scaffold store-release for a new app.
+"""`run.py init` (and `store-release init`): scaffold store-release for a new app.
 
     python3 -I -u store-release/run.py --app-root . init --platform ios|android|all --name "My App" [...]
+    store-release init --platform ios|android|all --name "My App" [...]    (pipx install store-release)
 
 Writes the app's store/store-release.toml (or --config), its caller workflows
 (ios-release.yml, android-release.yml, store-checks.yml) rendered from that config and
@@ -33,6 +34,8 @@ DEFAULT_DEVELOPER_DIR = "/Applications/Xcode_27.app/Contents/Developer"
 DEFAULT_IOS_TESTS = ".github/workflows/ios-tests.yml"
 DEFAULT_ANDROID_TESTS = ".github/workflows/android-tests.yml"
 DEPENDABOT = ".github/dependabot.yml"
+# How the next steps spell a store-release command from run.py (cli.run passes the installed command's).
+RUN_PY_LAUNCHER = "python3 -I -u <store-release>/run.py --app-root ."
 REMOTE = re.compile(r"(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)"
                     r"([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?")
 LOCAL_WORKFLOW_FILE = re.compile(r"\.github/workflows/([A-Za-z0-9._-]+)\.ya?ml")
@@ -388,7 +391,8 @@ def resolve_sha(answers: Answers, sha: str | None, *, allow_untagged: bool, open
     return commit
 
 
-def next_steps(answers: Answers, written: list[str], app_root: Path, *, dependabot_written: bool) -> list[str]:
+def next_steps(answers: Answers, written: list[str], app_root: Path, *, dependabot_written: bool,
+               launcher: str = RUN_PY_LAUNCHER) -> list[str]:
     steps = []
     project = answers.ios.get("project")
     if project and not (app_root / project / "project.pbxproj").is_file():
@@ -413,7 +417,7 @@ def next_steps(answers: Answers, written: list[str], app_root: Path, *, dependab
                                       ("ANDROID_RELEASE_AUTOMATION", answers.has_android)) if has]
     steps.append("Every switch is off until you set it (docs/switches.md); start with "
                  + " and ".join(masters) + ", for example `gh variable set " + masters[0] + " --body true`.")
-    steps.append("Check the files: python3 -I -u <store-release>/run.py --app-root . config check --files")
+    steps.append(f"Check the files: {launcher} config check --files")
     runs = [label for label, has in (("iOS Release", answers.has_ios), ("Android Release", answers.has_android)) if has]
     steps.append("Commit, then Run workflow on " + " and ".join(runs) + ": a validation run builds and signs, "
                  "uploads nothing, and prints a read-only store plan.")
@@ -508,7 +512,8 @@ def parser() -> argparse.ArgumentParser:
 
 
 def main(app_root: Path | None, argv: list[str], *, config_path: str = config_mod.DEFAULT_CONFIG,
-         ask: Callable[[str], str] | None = None, environ: dict[str, str] | None = None, opener=None) -> int:
+         ask: Callable[[str], str] | None = None, environ: dict[str, str] | None = None, opener=None,
+         launcher: str = RUN_PY_LAUNCHER) -> int:
     ns = parser().parse_args(argv)
     if app_root is None:
         raise InitError("init writes into the app: pass --app-root DIR (usually .)")
@@ -521,5 +526,5 @@ def main(app_root: Path | None, argv: list[str], *, config_path: str = config_mo
     sha = resolve_sha(answers, ns.sha, allow_untagged=ns.allow_untagged, opener=opener)
     files = planned_files(answers, sha=sha)
     written, dependabot = write(app_root, files, force=ns.force)
-    print("\n".join(next_steps(answers, written, app_root, dependabot_written=dependabot)))
+    print("\n".join(next_steps(answers, written, app_root, dependabot_written=dependabot, launcher=launcher)))
     return 0

@@ -16,7 +16,8 @@ every change comes with tests, and anything that alters what reaches a store is 
 
 ## Set up
 
-Python 3.13; the standard library is enough for the unit suite.
+Python 3.13 (the package supports 3.11 and later); the standard library is enough for the
+unit suite.
 
 ```bash
 git clone https://github.com/apoorvdarshan/store-release && cd store-release
@@ -29,6 +30,19 @@ python3 -m pip install --require-hashes -r requirements-lint.txt && python3 -m r
 python3 -I -u scripts/render_examples.py --check        # examples and templates are current
 ```
 
+The PyPI package, as CI's `package` job builds and checks it (its own environment: the
+dist lock pins other versions than the store lock):
+
+```bash
+python3 -m venv .venv-dist && .venv-dist/bin/python -m pip install --require-hashes -r requirements-dist.txt
+.venv-dist/bin/python -I scripts/dists.py build --out dist
+.venv-dist/bin/python -I scripts/dists.py check dist --python python3.11 --python python3.13
+```
+
+`check` runs `twine check --strict`, compares the files in the sdist and the wheel with
+`git ls-files store_release`, and runs the wheel alone in a new environment for each
+`--python` (`store-release --help`, `--version`, and `init` writing the templates).
+
 The `workflows` CI job also runs `actionlint` 1.7.12 on `.github/workflows/` and on every
 example's and template's callers. No test needs a store account, credentials or the
 network: tests generate the keys and files they need, and fake App Store Connect, Google
@@ -37,7 +51,7 @@ Play and GitHub.
 ## Rules for a change
 
 - **Pull requests only.** `main` changes through pull requests, and each must pass CI:
-  `test (stdlib)`, `test (strict)`, `test (macos)`, `lint`, `workflows`, CodeQL
+  `test (stdlib)`, `test (strict)`, `test (macos)`, `lint`, `package`, `workflows`, CodeQL
   (`Analyze (python)`, `Analyze (actions)`) and dependency review. The branch must be up to
   date with `main`, and review threads resolved, before it merges.
 - **Tests with every change**, in the suite that matches it (`tests/unit`, `tests/apps`,
@@ -63,7 +77,9 @@ Play and GitHub.
   service-account JSON or tokens, not even expired ones.
 - **Pins.** Third-party actions are pinned by full commit SHA with a `# vX.Y.Z` comment,
   with the same pin for an action in every file (a test enforces it). Python dependencies
-  are pinned by hash (`pip-compile --generate-hashes`, pip-tools 7.6.2, Python 3.13).
+  are pinned by hash (`pip-compile --generate-hashes`, pip-tools 7.6.2, Python 3.13). The
+  package's extras in `pyproject.toml` take the versions `requirements.in` and
+  `requirements-checks.in` pin as their floors (a test enforces it).
 - **Permissions.** Every job declares its `permissions`, and the rendered callers do too;
   expressions reach shell only through `env:` (tests enforce both).
 - **Commits** say what changed and why in plain words. By contributing you agree that your

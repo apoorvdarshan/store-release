@@ -46,6 +46,25 @@ own: everything runs on GitHub Actions.
 - **Pinned and reviewable.** Your callers pin a release commit SHA; Store checks on every
   pull request validate your store files, config and callers; Dependabot proposes updates.
 
+## Install
+
+The `store-release` command, the same CLI the workflows run, is on
+[PyPI](https://pypi.org/project/store-release/) for Python 3.11 or later:
+
+```bash
+pipx run store-release init --help     # run the latest release without installing it
+pipx install store-release             # or install the command
+```
+
+Without `--app-root` it works on the app in the current directory. `init`, `callers render`
+and the `config`, `caller` and `pins` checks need only the standard library; the extras add
+what the other commands import: `store-release[ios]` (PyJWT, for App Store Connect),
+`[android]` (the Google API client, for Google Play), `[images]` (Pillow, for screenshots),
+`[checks]` (PyYAML, for `caller check --pr`) or `[all]`, for example
+`pipx install "store-release[all]"`. PyPI releases start after v0.3.0; for v0.3.0 itself, use
+a checkout of the release (below). Your workflows never install the package: they run the
+release commit you pinned, with hash-locked requirements.
+
 ## Quickstart
 
 ### 1. Check your app
@@ -62,12 +81,10 @@ own: everything runs on GitHub Actions.
 
 ### 2. Add the config and the callers
 
-Run `init` from a checkout of the [latest release](https://github.com/apoorvdarshan/store-release/releases/latest)
-(`vX.Y.Z` below), in your app repository:
+Run `init` in your app repository:
 
 ```bash
-git clone --depth 1 --branch vX.Y.Z https://github.com/apoorvdarshan/store-release /tmp/store-release
-python3 -I -u /tmp/store-release/run.py --app-root . init --platform all \
+pipx run store-release init --platform all \
   --name "My App" \
   --bundle-id com.example.myapp --asc-app-id 1234567890 --team-id ABCDE12345 \
   --project ios/MyApp.xcodeproj \
@@ -76,12 +93,21 @@ python3 -I -u /tmp/store-release/run.py --app-root . init --platform all \
 
 It writes `store/store-release.toml` ([every key](docs/config.md)), the callers
 `.github/workflows/ios-release.yml`, `android-release.yml` and `store-checks.yml` pinned to
-that release's commit, and `.github/dependabot.yml` if you have none. Leave out flags to be
-asked for them; `--platform ios` or `android` sets up one platform; `init --help` lists the
-rest. The [templates](examples/templates/) show the result for placeholder values. Check
-the files with:
+the commit of the release it comes from, and `.github/dependabot.yml` if you have none. Leave
+out flags to be asked for them; `--platform ios` or `android` sets up one platform;
+`init --help` lists the rest. The [templates](examples/templates/) show the result for
+placeholder values. Check the files with:
 
 ```bash
+pipx run store-release config check --files
+```
+
+Without pipx, run the same commands from a checkout of the
+[latest release](https://github.com/apoorvdarshan/store-release/releases/latest) (`vX.Y.Z`):
+
+```bash
+git clone --depth 1 --branch vX.Y.Z https://github.com/apoorvdarshan/store-release /tmp/store-release
+python3 -I -u /tmp/store-release/run.py --app-root . init --platform all --name "My App" ...
 python3 -I -u /tmp/store-release/run.py --app-root . config check --files
 ```
 
@@ -171,8 +197,9 @@ runs are always the commit you pinned and reviewed ([workflows](docs/workflows.m
 
 ## Verifying store-release
 
-Each release ships its source archive with a SHA-256, a Sigstore signature bundle and a
-SLSA provenance attestation:
+Each release ships its source archive, sdist and wheel, each with a SHA-256 and a Sigstore
+signature bundle, and SLSA provenance attestations; PyPI carries the same sdist and wheel,
+with PEP 740 attestations from the same workflow:
 
 ```bash
 v=X.Y.Z
@@ -184,6 +211,9 @@ cosign verify-blob "store-release-$v-source.tar.gz" --bundle "store-release-$v-s
   --certificate-identity 'https://github.com/apoorvdarshan/store-release/.github/workflows/release.yml@refs/heads/main' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
+
+The same commands check `store_release-$v.tar.gz` and `store_release-$v-py3-none-any.whl`
+([verification](docs/verification.md#store-releases-own-releases), including PyPI's files).
 
 Tags are created only by the Release workflow after CI passed, and never move; your Store
 checks fail unless your pin is the commit its `# vX.Y.Z` tag points at. Verifying your
@@ -252,5 +282,7 @@ python3 -m pip install --require-hashes -r requirements.txt -r requirements-chec
 python3 -I -u run.py selftest --platform all --suite unit --suite apps --suite parity \
   --suite workflows --require-pillow --strict
 ```
+
+Building and checking the sdist and wheel: [CONTRIBUTING](CONTRIBUTING.md#set-up).
 
 [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [MIT License](LICENSE)
