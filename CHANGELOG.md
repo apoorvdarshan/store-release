@@ -8,16 +8,19 @@ or `config-breaking`.
 
 ## [Unreleased]
 
-Impact: checks-only
+## [0.4.0] - 2026-10-21
 
-store-release on PyPI: the `store-release` command, published by the Release workflow
-with Trusted Publishing. Apps' callers, configs and release runs do not change; the
-workflows never install the package.
+Impact: release-path
+
+Published on PyPI: the `store-release` command (`pipx install store-release`), published
+by the Release workflow with Trusted Publishing. Apps' callers and configs do not change,
+and the workflows never install the package. The release path changes by one action bump
+in `ios-github-release.yml` (below), hence the Impact.
 
 ### Added
 
 - The `store-release` package (Python 3.11 or later), published to PyPI by `release.yml`
-  from the next release on: `pipx install store-release` (or `pipx run store-release init`)
+  from this release on: `pipx install store-release` (or `pipx run store-release init`)
   gives the `store-release` command, the same CLI as `run.py`, also run as
   `python3 -m store_release`. Without `--app-root` it works on the app in the current
   directory (`run.py` still requires the flag). `init`, `callers render` and the config,
@@ -56,6 +59,36 @@ workflows never install the package.
   call, and reads and checks the release again for up to a minute before failing), so the
   PyPI step still runs for a release GitHub published anyway.
 - The lint targets Python 3.11, the package's floor (`ruff.toml`).
+- `actions/download-artifact` 8.0.2 (from 8.0.1; it retries a download that GitHub
+  rate-limits with HTTP 429) in `ios-github-release.yml`, where it fetches the signed source
+  archive on tag runs with `ios.github_release.source_archive` (Dependabot, #15).
+
+### App actions required
+
+None: no config, caller, switch or secret changes. Dependabot's store-release bump moves
+the callers' pins and version comments; validate it as any `release-path` release
+([how apps receive a release](docs/release-process.md#how-apps-receive-a-release)).
+
+### Verification
+
+- CI on `main` at `8c634eb8d45bb70516f8a6b6fdc164597d94d80d`, the code this release tags
+  (the release commit changes only this file, `__version__`, and the version in the
+  examples' and templates' rendered callers and config header):
+  [CI 39526509358](https://github.com/apoorvdarshan/store-release/actions/runs/39526509358)
+  (`test (stdlib)`, `test (strict)`, `test (macos)`, `lint`, `package`, `workflows`, and the
+  advisory `canary (fud-ai)`, which ran the store checks on fud-ai's `main`) and
+  [CodeQL 39526509343](https://github.com/apoorvdarshan/store-release/actions/runs/39526509343)
+  (`Analyze (python)`, `Analyze (actions)`). `release.yml` checks the required ones again on
+  the release commit.
+- The `package` job built the sdist and the wheel, passed `twine check --strict` and the
+  contents check, and ran the wheel alone on Python 3.11 to 3.15. The Release run's `pypi`
+  job publishes the release's own sdist and wheel and checks that PyPI serves them with
+  attestations from `release.yml` in the `pypi` environment.
+- Re-run probe: not run again. `probe-rerun.yml` and `probe-inner.yml` are unchanged since
+  the v0.1.0 results ([docs/rerun.md](docs/rerun.md#results)), and the callers call the
+  same jobs the same way.
+- No app validation dispatches yet: each app moves to v0.4.0 in its own pull request
+  (Dependabot), validated there. A defect they find ships as v0.4.1 (tags never move).
 
 ## [0.3.0] - 2026-10-21
 
@@ -328,7 +361,8 @@ No switch, secret or variable changes.
   migration PR, the next phase; they have not run yet. A defect they find ships as
   v0.1.1 (tags never move).
 
-[Unreleased]: https://github.com/apoorvdarshan/store-release/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/apoorvdarshan/store-release/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/apoorvdarshan/store-release/releases/tag/v0.4.0
 [0.3.0]: https://github.com/apoorvdarshan/store-release/releases/tag/v0.3.0
 [0.2.0]: https://github.com/apoorvdarshan/store-release/releases/tag/v0.2.0
 [0.1.0]: https://github.com/apoorvdarshan/store-release/releases/tag/v0.1.0

@@ -1,5 +1,5 @@
 # store-release configuration for Example App, written by `run.py init`.
-# Every key: https://github.com/apoorvdarshan/store-release/blob/v0.3.0/docs/config.md
+# Every key: https://github.com/apoorvdarshan/store-release/blob/v0.4.0/docs/config.md
 # Switches are repository variables and credentials repository secrets; nothing here is secret.
 schema = 1
 
