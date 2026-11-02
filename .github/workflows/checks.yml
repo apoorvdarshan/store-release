@@ -172,6 +172,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TOOL_REPOSITORY: ${{ job.workflow_repository }}
         run: python3 -I -u .store-release/run.py yanked check
+      # An app without [*.listing] and [*.whats_new] prepares nothing, so there is nothing to keep;
+      # the prepare steps above already fail when a configured table's text is missing or invalid.
       - name: Upload prepared artifacts (inspection only)
         if: env.STORE_RELEASE_PORTED_FLOW != 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -180,4 +182,4 @@ jobs:
           path: |
             ${{ runner.temp }}/whatsnew
             ${{ runner.temp }}/listing
-          if-no-files-found: error
+          if-no-files-found: ignore

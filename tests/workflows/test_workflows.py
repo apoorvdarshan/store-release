@@ -229,6 +229,15 @@ class ReusableWorkflowTests(unittest.TestCase):
         for path in sorted(WORKFLOWS.glob("*.yml")):
             self.assertNotIn("secrets: inherit", path.read_text(), path.name)
 
+    def test_store_checks_pass_without_listing_or_whats_new(self) -> None:
+        # An app without [*.listing] and [*.whats_new] prepares no files; the inspection upload
+        # must not fail its Store checks for that (Coincide's first iOS version has neither).
+        _, job = only_job(load("checks.yml"))
+        (upload,) = [step for step in job["steps"] if step.get("name") == "Upload prepared artifacts (inspection only)"]
+        self.assertEqual(upload["with"]["if-no-files-found"], "ignore")
+        self.assertEqual(upload["with"]["path"].split(), ["${{", "runner.temp", "}}/whatsnew", "${{", "runner.temp",
+                                                          "}}/listing"])
+
     def test_the_android_release_job_contract(self) -> None:
         job_id, job = only_job(load("android-publish.yml"))
         self.assertEqual(job_id, "release")
