@@ -6,7 +6,7 @@ store/store-release.toml; until then they are UNCONFIGURED, and any use fails.
 """
 from __future__ import annotations
 
-__version__ = "0.5.0"
+__version__ = "0.5.1"
 
 NOT_CONFIGURED = "store-release is not configured for an app"
 
