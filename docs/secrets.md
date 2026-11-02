@@ -14,6 +14,9 @@ passes exactly the secrets its reusable workflow declares, by name:
 ([workflows.md](workflows.md#startup-failures)); `callers render` and the pull request
 caller check keep the mappings exact.
 
+Each one comes from the repository secret of the same name, unless the app's config names
+another ([below](#other-repository-secret-names)).
+
 Every job that uses a secret first checks that it is set (as a boolean, `secrets.X != ''`;
 the value is never read for this) and names any that is missing.
 
@@ -76,6 +79,35 @@ identity and replace both secrets in every repository that has them.
 3. Store the JSON file as `PLAY_SERVICE_ACCOUNT_JSON`.
 
 One service account can serve all of a developer account's apps.
+
+## Other repository secret names
+
+A repository may already use a secret's name for something else: a repository that also
+builds a Mac app, for instance, may keep that app's notarization key in
+`APP_STORE_CONNECT_*`. Store the iOS app's credentials under other names and list them in
+`[ios.secrets]` ([config.md](config.md#iossecrets-optional)); `[android.secrets]` does the
+same for the Android secrets:
+
+```toml
+[ios.secrets]
+APP_STORE_CONNECT_API_KEY_ID = "IOS_ASC_API_KEY_ID"
+APP_STORE_CONNECT_ISSUER_ID = "IOS_ASC_ISSUER_ID"
+APP_STORE_CONNECT_API_KEY_P8 = "IOS_ASC_API_KEY_P8"
+```
+
+`callers render` then writes, in every job that takes them,
+
+```yaml
+    secrets:
+      APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.IOS_ASC_API_KEY_ID }}
+```
+
+and Store checks fail when a caller passes any other repository secret. The reusable
+workflows still see the names in the tables below, so their messages (a missing secret,
+redaction) use those; the config says which repository secret feeds each. Secrets the table
+does not list, here the two `IOS_DEV_SIGNING_*`, are passed from their own names. Set the
+repository secrets under the new names (`gh secret set IOS_ASC_API_KEY_ID`, ...); the
+callers never read the old ones.
 
 ## Per workflow
 

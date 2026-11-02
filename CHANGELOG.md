@@ -10,6 +10,22 @@ or `config-breaking`.
 
 Impact: checks-only
 
+### Added
+
+- `[ios.secrets]` and `[android.secrets]` (optional):
+  `<workflow secret> = "<repository secret>"` for each secret a reusable workflow declares
+  that the app keeps under another name, for a repository whose `APP_STORE_CONNECT_*` secrets already serve another app (a
+  Mac app's notarization key, say). `callers render` passes each listed secret from the
+  repository secret it names
+  (`APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.IOS_ASC_API_KEY_ID }}`), and
+  `caller check --pr` (Store checks) holds the callers to it. The config check
+  refuses an unknown workflow secret, a value that is not a repository secret name, two
+  workflow secrets reading one repository secret, and the key alias or key password with
+  `gradle-properties` signing ([config.md](docs/config.md#iossecrets-optional),
+  [secrets.md](docs/secrets.md#other-repository-secret-names)). The reusable workflows do
+  not change. Without the tables the callers are byte-identical to v0.4.0's (a test pins
+  the SHA-256 of Fud AI's).
+
 ### Changed
 
 - [Release process](docs/release-process.md#v040-was-uploaded-by-hand): v0.4.0 reached

@@ -48,6 +48,13 @@ dir = "store/creative/ios"
 [ios.github_release]
 title = "Example {version}"
 
+# The repository's APP_STORE_CONNECT_* secrets belong to another app here: the callers pass
+# these instead. The signing secrets keep their own names.
+[ios.secrets]
+APP_STORE_CONNECT_API_KEY_ID = "EXAMPLE_ASC_API_KEY_ID"
+APP_STORE_CONNECT_ISSUER_ID = "EXAMPLE_ASC_ISSUER_ID"
+APP_STORE_CONNECT_API_KEY_P8 = "EXAMPLE_ASC_API_KEY_P8"
+
 [android]
 tag_prefix = "android-v"
 package = "com.example.app"
@@ -69,3 +76,6 @@ dir = "store/screenshots/play"
 
 [android.github_release]
 asset_name = "{slug}-android-{version}-{version_code}"
+
+[android.secrets]
+PLAY_SERVICE_ACCOUNT_JSON = "EXAMPLE_PLAY_SERVICE_ACCOUNT_JSON"
