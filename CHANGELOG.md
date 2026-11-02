@@ -8,6 +8,15 @@ or `config-breaking`.
 
 ## [Unreleased]
 
+Impact: checks-only
+
+### Fixed
+
+- Store checks no longer fail for an app without `[ios.listing]`, `[ios.whats_new]`,
+  `[android.listing]` and `[android.whats_new]`: the inspection-only upload of the prepared
+  listing and What's New text (`checks.yml`) failed when there was nothing to upload. The
+  prepare steps before it still fail when a configured table's text is missing or invalid.
+
 ## [0.5.0] - 2026-11-02
 
 Impact: release-path
