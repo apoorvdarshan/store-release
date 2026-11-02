@@ -8,6 +8,8 @@ or `config-breaking`.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-02
+
 Impact: release-path
 
 Opt-in config for a repository that also ships another app (Coincide: a Mac app with its
@@ -52,6 +54,34 @@ one function, `github.ios_latest`, which the tag-only `ios-github-release.yml` j
   release's assets but have no PEP 740 attestations, and that run's `pypi` job is not
   re-run. Once the trusted publisher is added to the project, releases publish through
   `release.yml`, with their attestations.
+
+### App actions required
+
+None for apps that use neither key: their callers render the same bytes, and Dependabot's
+store-release bump moves only the pins and version comments. As a `release-path` release,
+validate the bump ([how apps receive a release](docs/release-process.md#how-apps-receive-a-release)).
+An app that adopts `[ios.secrets]`, `[android.secrets]` or `ios.github_release.latest` re-renders
+its callers (`callers render`) in the same change.
+
+### Verification
+
+- CI on `main` at `c76e9602415be085a2d6822983159202f5d64a2d`, the code this release tags
+  (the release commit changes only this file, `__version__`, and the version in the
+  examples' and templates' rendered callers and config header):
+  [CI 41400560291](https://github.com/apoorvdarshan/store-release/actions/runs/41400560291)
+  (`test (stdlib)`, `test (strict)`, `test (macos)`, `lint`, `package`, `workflows`, and the
+  advisory `canary (fud-ai)`, which ran the store checks on fud-ai's `main`) and
+  [CodeQL 41400560258](https://github.com/apoorvdarshan/store-release/actions/runs/41400560258)
+  (`Analyze (python)`, `Analyze (actions)`). `release.yml` checks the required ones again on
+  the release commit.
+- `test_fud_ai_renders_exactly_what_v0_4_0_rendered` pins the SHA-256 of the three callers
+  v0.4.0 rendered for Fud AI's config; this release renders the same bytes.
+- Re-run probe: not run again. `probe-rerun.yml` and `probe-inner.yml` are unchanged since
+  the v0.1.0 results ([docs/rerun.md](docs/rerun.md#results)), and the callers call the
+  same jobs the same way.
+- No app validation dispatches yet: Coincide adopts v0.5.0 in its own pull request, and its
+  first validation dispatch runs once that is on its `main` (a workflow must be on the
+  default branch to be dispatched). A defect it finds ships as v0.5.1 (tags never move).
 
 ## [0.4.0] - 2026-10-21
 
