@@ -602,7 +602,7 @@ def plan_github_release(app, planned, version, tag, build_number, env, report, p
     except github.GithubError as exc:
         phase("GitHub Release", f"{title!r}; Latest not planned ({exc})")
         return
-    latest = "--latest" if github.is_highest(tag, app.config.ios.tag_prefix, tags) else "--latest=false"
+    latest = github.ios_latest(app.config, tag, tags)
     action = "update the existing release" if exists else "create the release"
     result["github_release"] = {"title": title, "latest": latest, "exists": exists}
     phase("GitHub Release", f"{action} {tag} titled {title!r} with {latest}")

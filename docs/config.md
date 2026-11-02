@@ -254,8 +254,22 @@ The table itself is what `IOS_SUBMIT_REVIEW` needs (an empty table is fine).
 |---|---|---|---|---|
 | `ios.github_release.title` | template | `"iOS {version} (build {build})"` | `"My App {version}"` | placeholders `{version}`, `{tag}`, `{build}` (the uploaded build, else the project's `CURRENT_PROJECT_VERSION`) and `{build_suffix}` (` (build N)` only when this run uploaded build N) |
 | `ios.github_release.on_existing` | enum | `"update"` | `"keep"` | a tag's existing GitHub Release: `update` its title, notes and flags; `upload-missing` keep it and attach the release's files again unless all are there; `keep` it as it is; `fail` (create only) |
-| `ios.github_release.latest` | enum | `"highest"` | `"always"` | `highest`: marked Latest only when the tag is the highest iOS version; `always`: every release is created with `--latest` |
+| `ios.github_release.latest` | enum | `"highest"` | `"never"` | `highest`: marked Latest only when the tag is the highest iOS version; `always`: every release is created with `--latest`; `never`: every release is created and updated with `--latest=false`, for a repository whose Latest release belongs to another app (a Mac app's update feed or download link reads `releases/latest`) |
 | `ios.github_release.source_archive` | bool | `false` | `true` | a `source-archive` job (`ios-source-archive.yml`, the only iOS job with `id-token: write`) archives the tagged commit as `<slug>-<version>-source.tar.gz` with its `.sha256` and a Sigstore bundle, attests its provenance, and the release attaches the three files ([verification.md](verification.md)) |
+
+### `[ios.secrets]` (optional)
+
+The callers pass each reusable workflow its secrets by the names it declares
+([secrets.md](secrets.md)), each from the repository secret of the same name. Name another
+repository secret here when the app's is called otherwise, for instance when the
+repository's `APP_STORE_CONNECT_*` secrets already belong to another app built from it.
+`callers render` writes `APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.IOS_ASC_API_KEY_ID }}`
+for every job that takes the secret, and Store checks (`caller check --pr`) hold the
+callers to it. Without the table the callers are exactly what earlier versions rendered.
+
+| Key | Type | Default | Example | Meaning |
+|---|---|---|---|---|
+| `ios.secrets` | table | `{}` | `{ APP_STORE_CONNECT_API_KEY_ID = "IOS_ASC_API_KEY_ID" }` | `<workflow secret> = "<repository secret>"`. The keys are the iOS workflows' secrets: `APP_STORE_CONNECT_API_KEY_ID`, `APP_STORE_CONNECT_ISSUER_ID`, `APP_STORE_CONNECT_API_KEY_P8`, `IOS_DEV_SIGNING_P12_BASE64`, `IOS_DEV_SIGNING_P12_PASSWORD`; a secret not listed is passed from its own name. Values are upper-case letters, digits and `_`, starting with neither a digit nor `GITHUB_`, and no two workflow secrets may end up reading one repository secret. Messages about a missing secret name the workflow secret |
 
 ### `[android]`
 
@@ -316,6 +330,14 @@ The table itself is what `IOS_SUBMIT_REVIEW` needs (an empty table is fine).
 | Key | Type | Default | Example | Meaning |
 |---|---|---|---|---|
 | `android.github_release.asset_name` | template | `"{slug}-v{version}"` | `"{slug}-{version}-{version_code}"` | placeholders `{slug}`, `{version}`, `{version_code}`; must render to `^[A-Za-z0-9._-]+$`; names the `.aab`, `.apk` and their `.sigstore.json`. The title is fixed: `Android {version} (versionCode {version_code})` |
+
+### `[android.secrets]` (optional)
+
+As [`[ios.secrets]`](#iossecrets-optional), for the Android workflows.
+
+| Key | Type | Default | Example | Meaning |
+|---|---|---|---|---|
+| `android.secrets` | table | `{}` | `{ PLAY_SERVICE_ACCOUNT_JSON = "PLAY_PUBLISHER_JSON" }` | `<workflow secret> = "<repository secret>"`, as `ios.secrets`, for `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD` and `PLAY_SERVICE_ACCOUNT_JSON`. With `android.build.signing = "gradle-properties"` the callers pass no `ANDROID_KEY_ALIAS` or `ANDROID_KEY_PASSWORD`, so neither may be listed |
 
 ## Fixed in code, not config
 

@@ -302,6 +302,56 @@ class ConfigValueTests(unittest.TestCase):
         with self.assertRaisesRegex(config.ConfigError, "iPhone or iPad set"):
             config.parse(data)
 
+    def test_secret_names(self) -> None:
+        # Without the tables every secret keeps its own name (Fud AI's config has neither).
+        fud_ai = config.parse(fud_ai_data())
+        self.assertEqual((fud_ai.ios.secrets, fud_ai.android.secrets), ((), ()))
+        data = fud_ai_data()
+        data["ios"]["secrets"] = {"APP_STORE_CONNECT_API_KEY_P8": "IOS_ASC_API_KEY_P8",
+                                  "APP_STORE_CONNECT_API_KEY_ID": "IOS_ASC_API_KEY_ID",
+                                  "IOS_DEV_SIGNING_P12_BASE64": "IOS_DEV_SIGNING_P12_BASE64"}
+        data["android"]["secrets"] = {"PLAY_SERVICE_ACCOUNT_JSON": "PLAY_JSON"}
+        cfg = config.parse(data)
+        self.assertEqual(cfg.ios.secrets, (("APP_STORE_CONNECT_API_KEY_ID", "IOS_ASC_API_KEY_ID"),
+                                           ("APP_STORE_CONNECT_API_KEY_P8", "IOS_ASC_API_KEY_P8"),
+                                           ("IOS_DEV_SIGNING_P12_BASE64", "IOS_DEV_SIGNING_P12_BASE64")))
+        self.assertEqual(cfg.android.secrets, (("PLAY_SERVICE_ACCOUNT_JSON", "PLAY_JSON"),))
+        bad = [
+            ("ios", "x", 'ios.secrets: expected a table'),
+            ("ios", {"PLAY_SERVICE_ACCOUNT_JSON": "PLAY_JSON"}, "ios.secrets.PLAY_SERVICE_ACCOUNT_JSON: not a secret"),
+            ("ios", {"app_store_connect_api_key_id": "IOS_ASC_API_KEY_ID"}, "ios.secrets.app_store_connect_api_key_id"),
+            ("android", {"APP_STORE_CONNECT_API_KEY_ID": "X"}, "android.secrets.APP_STORE_CONNECT_API_KEY_ID"),
+            ("ios", {"APP_STORE_CONNECT_API_KEY_ID": "ios_asc_api_key_id"}, "not a repository secret name"),
+            ("ios", {"APP_STORE_CONNECT_API_KEY_ID": "GITHUB_TOKEN"}, "not a repository secret name"),
+            ("ios", {"APP_STORE_CONNECT_API_KEY_ID": "1KEY"}, "not a repository secret name"),
+            ("ios", {"APP_STORE_CONNECT_API_KEY_ID": "MY-KEY"}, "not a repository secret name"),
+            ("ios", {"APP_STORE_CONNECT_API_KEY_ID": ""}, "not a repository secret name"),
+            ("ios", {"APP_STORE_CONNECT_API_KEY_ID": 5}, "not a repository secret name"),
+            ("ios", {"APP_STORE_CONNECT_API_KEY_ID": "K" * 101}, "not a repository secret name"),
+            # Two workflow secrets fed from one repository secret, mapped or by its own name.
+            ("ios", {"APP_STORE_CONNECT_API_KEY_ID": "ASC", "APP_STORE_CONNECT_ISSUER_ID": "ASC"},
+             "APP_STORE_CONNECT_API_KEY_ID and APP_STORE_CONNECT_ISSUER_ID would both read the repository secret ASC"),
+            ("ios", {"APP_STORE_CONNECT_API_KEY_P8": "APP_STORE_CONNECT_API_KEY_ID"},
+             "would both read the repository secret APP_STORE_CONNECT_API_KEY_ID"),
+            ("android", {"ANDROID_KEY_PASSWORD": "ANDROID_KEYSTORE_PASSWORD"},
+             "ANDROID_KEYSTORE_PASSWORD and ANDROID_KEY_PASSWORD would both read"),
+        ]
+        for platform, value, fragment in bad:
+            data = fud_ai_data()
+            data[platform]["secrets"] = value
+            with self.subTest(platform=platform, value=value), self.assertRaisesRegex(config.ConfigError,
+                                                                                      re.escape(fragment)):
+                config.parse(data)
+        # gradle-properties signing passes only the keystore and its password.
+        verceltics = tomllib.loads((TOOL_ROOT / "examples" / "verceltics" / "store-release.toml").read_text())
+        verceltics["android"]["secrets"] = {"ANDROID_KEYSTORE_PASSWORD": "VERCELTICS_KEYSTORE_PASSWORD"}
+        self.assertEqual(config.parse(verceltics).android.secrets,
+                         (("ANDROID_KEYSTORE_PASSWORD", "VERCELTICS_KEYSTORE_PASSWORD"),))
+        verceltics["android"]["secrets"] = {"ANDROID_KEY_ALIAS": "VERCELTICS_KEY_ALIAS"}
+        with self.assertRaisesRegex(config.ConfigError,
+                                    "android.secrets.ANDROID_KEY_ALIAS: gradle-properties signing does not take"):
+            config.parse(verceltics)
+
     def test_templates_render(self) -> None:
         self.assertEqual(config.render_template("iOS {version} (build {build})", version="7.2", build="40"),
                          "iOS 7.2 (build 40)")
@@ -1133,6 +1183,26 @@ class GithubReleaseTests(unittest.TestCase):
         gh = FakeGh(["ios-v7.2", "ios-v7.10"], exists=False)
         self.assertEqual(self.release(gh, platform="ios", tag="ios-v7.2", version="7.2", uploaded_build="40",
                                       notes_file="")[0][-1], "--latest=false")
+
+    def test_ios_never_latest(self) -> None:
+        # ios.github_release.latest = "never": the highest tag, created or updated, never takes Latest.
+        data = fud_ai_data()
+        data["ios"]["github_release"]["latest"] = "never"
+        cfg = config.parse(data)
+        self.assertEqual(cfg.ios.latest, "never")
+        for exists in (False, True):
+            with self.subTest(exists=exists):
+                commands = github.ios_release_commands(cfg, self.app.root, tag="ios-v7.2", version="7.2",
+                                                       uploaded_build="40", notes_file="", repo="o/r",
+                                                       tags=["ios-v7.1"], exists=exists)
+                self.assertEqual(commands[0][-1], "--latest=false")
+                self.assertNotIn("--latest", commands[0])
+        self.assertEqual(github.ios_latest(cfg, "ios-v7.2", ["ios-v7.1"]), "--latest=false")
+        self.assertEqual(github.ios_latest(self.app.config, "ios-v7.2", ["ios-v7.1"]), "--latest")
+        self.assertEqual(github.ios_latest(self.app.config, "ios-v7.2", ["ios-v7.3"]), "--latest=false")
+        data["ios"]["github_release"]["latest"] = "sometimes"
+        with self.assertRaisesRegex(config.ConfigError, "ios.github_release.latest: 'sometimes'"):
+            config.parse(data)
 
     def test_highest_rule(self) -> None:
         self.assertTrue(github.is_highest("ios-v7.2", "ios-v", ["ios-v7.1.9", "ios-v7.2", "android-v9.0", "ios-vX"]))

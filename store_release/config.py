@@ -72,8 +72,9 @@ GATE_POLICIES = ("parallel", "after-prepare", "when-uploading")
 #   keep            leave it as it is
 #   fail            create only; an existing release fails the job
 ON_EXISTING = ("update", "upload-missing", "keep", "fail")
-# Which iOS release is marked Latest: only the highest version (the default), or every one (the others).
-LATEST_POLICIES = ("highest", "always")
+# Which iOS release is marked Latest: only the highest version (the default), every one (the ported
+# flows), or none (a repository whose Latest release is another app's, such as a Mac app's update feed).
+LATEST_POLICIES = ("highest", "always", "never")
 GATE_INPUT = re.compile(r"[A-Za-z0-9_-]+")
 SIGNING_STYLES = ("keystore-properties", "gradle-properties")
 GRADLE_PROPERTY = re.compile(r"[A-Za-z_][A-Za-z0-9_.]*")
@@ -81,6 +82,14 @@ KEY_ALIAS = re.compile(r"[A-Za-z0-9_.-]+")
 SDK_PACKAGE = re.compile(r"[A-Za-z0-9_.;-]+")
 APP_GROUP = re.compile(r"group\.[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+")
 MANIFEST_NAME = re.compile(r"[A-Za-z0-9._-]+\.json")
+# The secrets the reusable workflows declare, which the callers pass by these names. An app's
+# [ios.secrets] / [android.secrets] can feed one from a repository secret named otherwise.
+ASC_SECRETS = ("APP_STORE_CONNECT_API_KEY_ID", "APP_STORE_CONNECT_ISSUER_ID", "APP_STORE_CONNECT_API_KEY_P8")
+SIGNING_SECRETS = ("IOS_DEV_SIGNING_P12_BASE64", "IOS_DEV_SIGNING_P12_PASSWORD")
+KEYSTORE_SECRETS = ("ANDROID_KEYSTORE_BASE64", "ANDROID_KEYSTORE_PASSWORD", "ANDROID_KEY_ALIAS", "ANDROID_KEY_PASSWORD")
+PLAY_SECRET = "PLAY_SERVICE_ACCOUNT_JSON"
+# A repository secret name: GitHub's rules (letters, digits, _; no leading digit; never GITHUB_), upper case.
+SECRET_NAME = re.compile(r"(?!GITHUB_)[A-Z_][A-Z0-9_]{0,99}")
 
 
 class ConfigError(Exception):
@@ -194,6 +203,9 @@ class Ios:
     # Attach a git archive of the tagged commit with its .sha256 and a Sigstore bundle, and
     # attest its build provenance.
     source_archive: bool = False
+    # (workflow secret, repository secret) for each secret the callers pass from a repository
+    # secret of another name; every other secret is passed from its own name.
+    secrets: tuple[tuple[str, str], ...] = ()
 
     @property
     def pbxproj(self) -> str:
@@ -233,6 +245,8 @@ class Android:
     pad_to_9_16: bool = True
     asset_name: str = "{slug}-v{version}"
     flow: str = STANDARD_FLOW
+    # As Ios.secrets.
+    secrets: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -636,6 +650,33 @@ def _app_groups(table: _Table) -> tuple[tuple[str, tuple[str, ...]], ...]:
     return tuple(sorted(groups))
 
 
+def _secret_names(table: _Table, accepted: tuple[str, ...]) -> tuple[tuple[str, str], ...]:
+    """ios.secrets / android.secrets: `<workflow secret> = "<repository secret>"` for each secret a reusable
+    workflow declares that the app keeps under another name (say, because the repository's
+    APP_STORE_CONNECT_* secrets serve another of its apps). Secrets it does not list keep their own names."""
+    key = table.key("secrets")
+    raw = table.raw("secrets", {})
+    if not isinstance(raw, dict):
+        raise ConfigError(f'{key}: expected a table of <workflow secret> = "<repository secret>"')
+    renamed: dict[str, str] = {}
+    for name, value in raw.items():
+        entry = f"{key}.{name}"
+        if name not in accepted:
+            raise ConfigError(f"{entry}: not a secret the {table.dotted} workflows take "
+                              f"(accepted: {', '.join(accepted)})")
+        if not isinstance(value, str) or not SECRET_NAME.fullmatch(value):
+            raise ConfigError(f"{entry}: {value!r} is not a repository secret name (upper-case letters, digits "
+                              "and _, starting with neither a digit nor GITHUB_)")
+        renamed[name] = value
+    readers: dict[str, str] = {}
+    for name in accepted:
+        source = renamed.get(name, name)
+        if source in readers:
+            raise ConfigError(f"{key}: {readers[source]} and {name} would both read the repository secret {source}")
+        readers[source] = name
+    return tuple(sorted(renamed.items()))
+
+
 def _ios(table: _Table, slug: str) -> Ios:
     reserved = IOS_STAGE_JOBS + RESERVED_JOB_NAMES
     flow = _flow(table, IOS_FLOWS)
@@ -744,11 +785,12 @@ def _ios(table: _Table, slug: str) -> Ios:
         latest = release_table.enum("latest", LATEST_POLICIES, "highest")
         source_archive = release_table.bool("source_archive", False)
         release_table.done()
+    secrets = _secret_names(table, ASC_SECRETS + SIGNING_SECRETS)
     table.done()
     return Ios(tag_prefix, bundle_id, asc_app_id, team_id, project, scheme, app_target, info_plist,
                locale, gate_jobs, build, listing, whats_new, screenshots, creative_dir, iap_route, title,
                export_compliance, creative_sizes, flow, gate_policy, prepare_checks, prepare_checkout,
-               screenshot_manifest, on_existing, latest, source_archive)
+               screenshot_manifest, on_existing, latest, source_archive, secrets)
 
 
 def _android(table: _Table, slug: str) -> Android:
@@ -820,9 +862,14 @@ def _android(table: _Table, slug: str) -> Android:
     if not ASSET_NAME.fullmatch(sample):
         raise ConfigError(f"android.github_release.asset_name: {asset_name!r} renders to {sample!r}, "
                           "which is not a safe file name")
+    secrets = _secret_names(table, KEYSTORE_SECRETS + (PLAY_SECRET,))
+    if signing == "gradle-properties":
+        for name, _ in secrets:
+            if name in KEYSTORE_SECRETS[2:]:
+                raise ConfigError(f"{table.key('secrets')}.{name}: gradle-properties signing does not take {name}")
     table.done()
     return Android(tag_prefix, package, gradle_file, cert, locale, gate_jobs, build, listing, whats_new,
-                   screenshots_dir, pad, asset_name, flow)
+                   screenshots_dir, pad, asset_name, flow, secrets)
 
 
 def parse(data: dict[str, Any]) -> Config:

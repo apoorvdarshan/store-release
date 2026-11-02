@@ -3,6 +3,7 @@ check (PyYAML) catches every single-key change, forbidden job names, secret mapp
 from __future__ import annotations
 
 import copy
+import hashlib
 import io
 import shutil
 import subprocess
@@ -115,6 +116,49 @@ class RenderTests(unittest.TestCase):
         for name in ("prepare", "build", "wait-for-build", "app-store-connect", "github-release", "store-plan"):
             self.assertEqual(jobs[name]["with"]["config"], "ci/release.toml", name)
         self.assertNotIn("with", jobs["ios-tests"])
+
+    def test_fud_ai_renders_exactly_what_v0_4_0_rendered(self) -> None:
+        # The SHA-256 of what v0.4.0 rendered for Fud AI's config (no [ios.secrets] or [android.secrets]),
+        # for the placeholder commit and version 0.4.0: an app without the tables gets byte-identical callers.
+        v040 = {"ios": "488d300a3be0b0867e34622e8dd21eedc4b587ec2cd2bbe2e40948bf00ff4474",
+                "android": "b5e662bdb8e6c527705bcedbdfa5407d5e87e765b540daba8a0166c4847fa1fd",
+                "checks": "ff85870db07174e92d045da964d7fd0449e43cce3444c47e1ddb074e0208fd5a"}
+        self.assertEqual((fud_ai().ios.secrets, fud_ai().android.secrets), ((), ()))
+        for platform, digest in v040.items():
+            with self.subTest(platform=platform):
+                self.assertEqual(hashlib.sha256(render(platform, version="0.4.0").encode()).hexdigest(), digest)
+
+    def test_secret_names_feed_every_job_and_change_nothing_else(self) -> None:
+        ios_names = {name: f"MY_{name}" for name in callers.ASC_SECRETS + callers.SIGNING_SECRETS}
+        android_names = {name: f"MY_{name}" for name in (*callers.KEYSTORE_SECRETS, callers.PLAY_SECRET)}
+        data = tomllib.loads((EXAMPLES / "fud-ai" / "store-release.toml").read_text())
+        data["ios"]["secrets"] = ios_names
+        data["android"]["secrets"] = android_names
+        renamed = config.parse(data)
+        for platform, names in (("ios", ios_names), ("android", android_names)):
+            with self.subTest(platform=platform):
+                plain = yaml.safe_load(render(platform))
+                mapped = yaml.safe_load(render(platform, renamed))
+                seen = set()
+                for job_id, job in plain["jobs"].items():
+                    if "secrets" not in job:
+                        self.assertNotIn("secrets", mapped["jobs"][job_id])
+                        continue
+                    # The keys are the reusable workflow's names; only the repository secret changes.
+                    self.assertEqual(list(mapped["jobs"][job_id]["secrets"]), list(job["secrets"]), job_id)
+                    for name, value in mapped["jobs"][job_id]["secrets"].items():
+                        self.assertEqual(value, f"${{{{ secrets.{names[name]} }}}}", f"{job_id}.{name}")
+                        seen.add(name)
+                    mapped["jobs"][job_id]["secrets"] = job["secrets"]
+                self.assertEqual(seen, set(names))
+                self.assertEqual(mapped, plain)
+        self.assertEqual(render("checks", renamed), render("checks"))
+        # A partial table renames only what it lists.
+        data["ios"]["secrets"] = {"APP_STORE_CONNECT_ISSUER_ID": "IOS_ASC_ISSUER_ID"}
+        build = yaml.safe_load(render("ios", config.parse(data)))["jobs"]["build"]["secrets"]
+        self.assertEqual(build["APP_STORE_CONNECT_ISSUER_ID"], "${{ secrets.IOS_ASC_ISSUER_ID }}")
+        self.assertEqual(build["APP_STORE_CONNECT_API_KEY_ID"], "${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}")
+        self.assertEqual(build["IOS_DEV_SIGNING_P12_PASSWORD"], "${{ secrets.IOS_DEV_SIGNING_P12_PASSWORD }}")
 
     def test_bad_render_input(self) -> None:
         for kwargs in ({"sha": "abc", "version": "0.1.0"}, {"sha": ZERO, "version": "v0.1"},
@@ -230,6 +274,23 @@ class PullRequestCheckTests(unittest.TestCase):
         ios.write_text(original)
         (self.workflows / "store-checks.yml").unlink()
         self.fails("store-checks.yml: missing")
+
+    def test_the_pr_check_holds_the_callers_to_the_secret_names(self) -> None:
+        data = tomllib.loads((EXAMPLES / "fud-ai" / "store-release.toml").read_text())
+        data["ios"]["secrets"] = {"APP_STORE_CONNECT_API_KEY_ID": "IOS_ASC_API_KEY_ID"}
+        data["android"]["secrets"] = {"PLAY_SERVICE_ACCOUNT_JSON": "PLAY_JSON"}
+        renamed = config.parse(data)
+        # The callers v0.4.0 rendered (every secret by its own name) no longer match a config that renames.
+        self.cfg = renamed
+        self.fails("ios-release.yml: jobs.prepare.secrets.APP_STORE_CONNECT_API_KEY_ID: "
+                   "'${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}', expected '${{ secrets.IOS_ASC_API_KEY_ID }}'")
+        self.fails("android-release.yml: jobs.gates.secrets.PLAY_SERVICE_ACCOUNT_JSON")
+        for platform in ("ios", "android"):
+            (self.workflows / FILES[platform]).write_text(render(platform, renamed, sha=SHA, version=__version__))
+        self.check()
+        # The renamed callers fail against a config without the tables.
+        self.cfg = fud_ai()
+        self.fails("expected '${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}'")
 
     def test_pins_check_catches_a_half_upgrade(self) -> None:
         other = self.workflows / "other.yml"

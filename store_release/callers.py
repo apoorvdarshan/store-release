@@ -33,7 +33,8 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from store_release import __version__
-from store_release.config import DEFAULT_CONFIG, Config, ConfigError, render_template
+from store_release.config import (ASC_SECRETS, DEFAULT_CONFIG, KEYSTORE_SECRETS, PLAY_SECRET, SIGNING_SECRETS,
+                                  Config, ConfigError, render_template)
 
 DEFAULT_REPOSITORY = "apoorvdarshan/store-release"
 SHA40 = re.compile(r"[0-9a-f]{40}")
@@ -42,10 +43,6 @@ REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 CALLER_FILES = {"ios": "ios-release.yml", "android": "android-release.yml", "checks": "store-checks.yml"}
 # A plain job with either name would satisfy an app's required status check by accident.
 FORBIDDEN_JOB_NAMES = ("web", "android")
-ASC_SECRETS = ("APP_STORE_CONNECT_API_KEY_ID", "APP_STORE_CONNECT_ISSUER_ID", "APP_STORE_CONNECT_API_KEY_P8")
-SIGNING_SECRETS = ("IOS_DEV_SIGNING_P12_BASE64", "IOS_DEV_SIGNING_P12_PASSWORD")
-KEYSTORE_SECRETS = ("ANDROID_KEYSTORE_BASE64", "ANDROID_KEYSTORE_PASSWORD", "ANDROID_KEY_ALIAS", "ANDROID_KEY_PASSWORD")
-PLAY_SECRET = "PLAY_SERVICE_ACCOUNT_JSON"
 GATE_LABELS = {"ios-tests": "the iOS tests", "quality": "quality checks"}
 TAG_LOOKUP_TIMEOUT = 30
 # An annotated tag may point at another tag; follow at most this many before giving up.
@@ -129,8 +126,11 @@ def _uses(repository: str, workflow: str, sha: str, version: str) -> str:
     return f"uses: {repository}/.github/workflows/{workflow}@{sha} # v{version}"
 
 
-def _secrets(names: tuple[str, ...]) -> list[str]:
-    return ["    secrets:"] + [f"      {name}: ${{{{ secrets.{name} }}}}" for name in names]
+def _secrets(names: tuple[str, ...], renamed: tuple[tuple[str, str], ...] = ()) -> list[str]:
+    """A job's `secrets:`, each workflow secret from the repository secret of its own name, or of the name
+    [ios.secrets] / [android.secrets] gives it."""
+    sources = dict(renamed)
+    return ["    secrets:"] + [f"      {name}: ${{{{ secrets.{sources.get(name, name)} }}}}" for name in names]
 
 
 def _with(values: list[tuple[str, str]], config_path: str) -> list[str]:
@@ -295,7 +295,7 @@ def render_ios(config: Config, *, sha: str, version: str, repository: str = DEFA
         "    permissions:",
         "      contents: read",
         *_with([("marketing_version", "${{ inputs.marketing_version }}")], config_path),
-        *_secrets(ASC_SECRETS),
+        *_secrets(ASC_SECRETS, ios.secrets),
         "",
         "  build:",
         f"    needs: {needs('prepare')}",
@@ -316,7 +316,7 @@ def render_ios(config: Config, *, sha: str, version: str, repository: str = DEFA
                 ("marketing_version", "${{ needs.prepare.outputs.marketing_version }}"),
                 ("build_number", "${{ needs.prepare.outputs.build_number }}"),
                 ("tool_sha", "${{ needs.prepare.outputs.tool_sha }}")], config_path),
-        *_secrets(ASC_SECRETS + SIGNING_SECRETS),
+        *_secrets(ASC_SECRETS + SIGNING_SECRETS, ios.secrets),
         "",
         "  # Its own job, so \"Re-run failed jobs\" after a later store-step failure keeps this",
         "  # result (and build_id) instead of waiting again against the original upload deadline.",
@@ -337,7 +337,7 @@ def render_ios(config: Config, *, sha: str, version: str, repository: str = DEFA
                 ("wait_minutes", "${{ needs.prepare.outputs.wait_minutes }}"),
                 ("poll_seconds", "${{ needs.prepare.outputs.poll_seconds }}"),
                 ("tool_sha", "${{ needs.prepare.outputs.tool_sha }}")], config_path),
-        *_secrets(ASC_SECRETS),
+        *_secrets(ASC_SECRETS, ios.secrets),
         "",
         "  app-store-connect:",
         f"    needs: {needs('prepare', 'build', 'wait-for-build')}",
@@ -371,7 +371,7 @@ def render_ios(config: Config, *, sha: str, version: str, repository: str = DEFA
                 ("submit", "${{ needs.prepare.outputs.submit }}"),
                 ("public_release", "${{ needs.prepare.outputs.public_release }}"),
                 ("tool_sha", "${{ needs.prepare.outputs.tool_sha }}")], config_path),
-        *_secrets(ASC_SECRETS),
+        *_secrets(ASC_SECRETS, ios.secrets),
         "",
         *(_source_archive_job(repository, sha, version, config_path, release_if, gate_results, needs)
           if ios.source_archive else []),
@@ -397,7 +397,7 @@ def render_ios(config: Config, *, sha: str, version: str, repository: str = DEFA
         "      contents: read",
         *_with([("marketing_version", "${{ needs.prepare.outputs.marketing_version }}"),
                 ("tool_sha", "${{ needs.prepare.outputs.tool_sha }}")], config_path),
-        *_secrets(ASC_SECRETS),
+        *_secrets(ASC_SECRETS, ios.secrets),
     ]
     return "\n".join(lines) + "\n"
 
@@ -461,8 +461,7 @@ def render_android(config: Config, *, sha: str, version: str, app_repository: st
         "      contents: read",
         "      actions: read",
         *_with([], config_path),
-        "    secrets:",
-        f"      {PLAY_SECRET}: ${{{{ secrets.{PLAY_SECRET} }}}}",
+        *_secrets((PLAY_SECRET,), android.secrets),
         "",
     ]
     for job in android.gate_jobs:
@@ -498,7 +497,7 @@ def render_android(config: Config, *, sha: str, version: str, app_repository: st
                 ("play_upload", "${{ needs.gates.outputs.play_upload }}"),
                 ("play_tracks", "${{ needs.gates.outputs.play_tracks }}"),
                 ("tool_sha", "${{ needs.gates.outputs.tool_sha }}")], config_path),
-        *_secrets(keystore_secrets + (PLAY_SECRET,)),
+        *_secrets(keystore_secrets + (PLAY_SECRET,), android.secrets),
         "",
         "  # Validation runs only: a read-only, report-only plan of what a tag run would change.",
         "  store-plan:",
@@ -508,8 +507,7 @@ def render_android(config: Config, *, sha: str, version: str, app_repository: st
         "    permissions:",
         "      contents: read",
         *_with([("tool_sha", "${{ needs.gates.outputs.tool_sha }}")], config_path),
-        "    secrets:",
-        f"      {PLAY_SECRET}: ${{{{ secrets.{PLAY_SECRET} }}}}",
+        *_secrets((PLAY_SECRET,), android.secrets),
     ]
     return "\n".join(lines) + "\n"
 
