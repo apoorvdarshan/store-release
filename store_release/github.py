@@ -10,7 +10,8 @@ Android: title "Android {version} (versionCode {version_code})" (github-prefligh
 
 A release is marked Latest only when its tag is the highest version among the
 non-draft releases with the same tag prefix, so re-running an older tag's
-release step never takes Latest from a newer release.
+release step never takes Latest from a newer release. ios.github_release.latest
+can mark every iOS release Latest (always) or none (never).
 """
 from __future__ import annotations
 
@@ -53,6 +54,16 @@ def is_highest(tag: str, prefix: str, tags: Sequence[str]) -> bool:
         if key is not None and key >= mine:
             return False
     return True
+
+
+def ios_latest(config: Config, tag: str, tags: Sequence[str]) -> str:
+    """The iOS release's Latest flag, as ios.github_release.latest says: only for the highest version
+    (highest), for every release (always) or for none (never)."""
+    if config.ios.latest == "always":
+        return "--latest"
+    if config.ios.latest == "never":
+        return "--latest=false"
+    return "--latest" if is_highest(tag, config.ios.tag_prefix, tags) else "--latest=false"
 
 
 def release_tags(repo: str, run: Runner = run_gh) -> list[str]:
@@ -120,10 +131,7 @@ def ios_release_commands(config: Config, app_root: Path, *, tag: str, version: s
                          attached: Sequence[str] | None = None) -> list[list[str]]:
     title = ios_title(config, app_root, version=version, uploaded_build=uploaded_build, tag=tag)
     notes = notes_args(notes_file)
-    if config.ios.latest == "always":
-        latest = ["--latest"]
-    else:
-        latest = ["--latest"] if is_highest(tag, config.ios.tag_prefix, tags) else ["--latest=false"]
+    latest = [ios_latest(config, tag, tags)]
     policy = config.ios.on_existing
     if exists and policy == "update":
         return [["gh", "release", "edit", tag, "--repo", repo, "--title", title, *notes,

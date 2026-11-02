@@ -8,23 +8,39 @@ or `config-breaking`.
 
 ## [Unreleased]
 
-Impact: checks-only
+Impact: release-path
+
+Opt-in config for a repository that also ships another app (Coincide: a Mac app with its
+own `APP_STORE_CONNECT_*` secrets and its own Latest release). Apps that use neither key
+render byte-identical callers and get the same GitHub Releases as before. The
+Impact is `release-path` because the iOS GitHub Release step's Latest choice moved into
+one function, `github.ios_latest`, which the tag-only `ios-github-release.yml` job runs.
 
 ### Added
 
 - `[ios.secrets]` and `[android.secrets]` (optional):
   `<workflow secret> = "<repository secret>"` for each secret a reusable workflow declares
-  that the app keeps under another name, for a repository whose `APP_STORE_CONNECT_*` secrets already serve another app (a
-  Mac app's notarization key, say). `callers render` passes each listed secret from the
-  repository secret it names
+  that the app keeps under another name, for a repository whose `APP_STORE_CONNECT_*`
+  secrets already serve another app (a Mac app's notarization key, say). `callers render`
+  passes each listed secret from the repository secret it names
   (`APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.IOS_ASC_API_KEY_ID }}`), and
-  `caller check --pr` (Store checks) holds the callers to it. The config check
-  refuses an unknown workflow secret, a value that is not a repository secret name, two
-  workflow secrets reading one repository secret, and the key alias or key password with
+  `caller check --pr` (Store checks) holds the callers to it. The config check refuses an
+  unknown workflow secret, a value that is not a repository secret name, two workflow
+  secrets reading one repository secret, and the key alias or key password with
   `gradle-properties` signing ([config.md](docs/config.md#iossecrets-optional),
   [secrets.md](docs/secrets.md#other-repository-secret-names)). The reusable workflows do
   not change. Without the tables the callers are byte-identical to v0.4.0's (a test pins
   the SHA-256 of Fud AI's).
+- `ios.github_release.latest = "never"`: every iOS GitHub Release is created and updated
+  with `--latest=false`, so it never takes Latest from another app's release (a Mac app's
+  update feed, download link or Homebrew livecheck reading `releases/latest`). The default
+  stays `highest`.
+
+### Fixed
+
+- The store plan's GitHub Release line names the Latest flag the release step uses: with
+  `ios.github_release.latest = "always"` (the ported flows) it said `--latest=false` for a
+  tag below the highest one, although the release is created with `--latest`.
 
 ### Changed
 

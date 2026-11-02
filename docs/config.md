@@ -254,7 +254,7 @@ The table itself is what `IOS_SUBMIT_REVIEW` needs (an empty table is fine).
 |---|---|---|---|---|
 | `ios.github_release.title` | template | `"iOS {version} (build {build})"` | `"My App {version}"` | placeholders `{version}`, `{tag}`, `{build}` (the uploaded build, else the project's `CURRENT_PROJECT_VERSION`) and `{build_suffix}` (` (build N)` only when this run uploaded build N) |
 | `ios.github_release.on_existing` | enum | `"update"` | `"keep"` | a tag's existing GitHub Release: `update` its title, notes and flags; `upload-missing` keep it and attach the release's files again unless all are there; `keep` it as it is; `fail` (create only) |
-| `ios.github_release.latest` | enum | `"highest"` | `"always"` | `highest`: marked Latest only when the tag is the highest iOS version; `always`: every release is created with `--latest` |
+| `ios.github_release.latest` | enum | `"highest"` | `"never"` | `highest`: marked Latest only when the tag is the highest iOS version; `always`: every release is created with `--latest`; `never`: every release is created and updated with `--latest=false`, for a repository whose Latest release belongs to another app (a Mac app's update feed or download link reads `releases/latest`) |
 | `ios.github_release.source_archive` | bool | `false` | `true` | a `source-archive` job (`ios-source-archive.yml`, the only iOS job with `id-token: write`) archives the tagged commit as `<slug>-<version>-source.tar.gz` with its `.sha256` and a Sigstore bundle, attests its provenance, and the release attaches the three files ([verification.md](verification.md)) |
 
 ### `[ios.secrets]` (optional)

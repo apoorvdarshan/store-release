@@ -1184,6 +1184,26 @@ class GithubReleaseTests(unittest.TestCase):
         self.assertEqual(self.release(gh, platform="ios", tag="ios-v7.2", version="7.2", uploaded_build="40",
                                       notes_file="")[0][-1], "--latest=false")
 
+    def test_ios_never_latest(self) -> None:
+        # ios.github_release.latest = "never": the highest tag, created or updated, never takes Latest.
+        data = fud_ai_data()
+        data["ios"]["github_release"]["latest"] = "never"
+        cfg = config.parse(data)
+        self.assertEqual(cfg.ios.latest, "never")
+        for exists in (False, True):
+            with self.subTest(exists=exists):
+                commands = github.ios_release_commands(cfg, self.app.root, tag="ios-v7.2", version="7.2",
+                                                       uploaded_build="40", notes_file="", repo="o/r",
+                                                       tags=["ios-v7.1"], exists=exists)
+                self.assertEqual(commands[0][-1], "--latest=false")
+                self.assertNotIn("--latest", commands[0])
+        self.assertEqual(github.ios_latest(cfg, "ios-v7.2", ["ios-v7.1"]), "--latest=false")
+        self.assertEqual(github.ios_latest(self.app.config, "ios-v7.2", ["ios-v7.1"]), "--latest")
+        self.assertEqual(github.ios_latest(self.app.config, "ios-v7.2", ["ios-v7.3"]), "--latest=false")
+        data["ios"]["github_release"]["latest"] = "sometimes"
+        with self.assertRaisesRegex(config.ConfigError, "ios.github_release.latest: 'sometimes'"):
+            config.parse(data)
+
     def test_highest_rule(self) -> None:
         self.assertTrue(github.is_highest("ios-v7.2", "ios-v", ["ios-v7.1.9", "ios-v7.2", "android-v9.0", "ios-vX"]))
         self.assertFalse(github.is_highest("ios-v7.2", "ios-v", ["ios-v7.2.0"]))

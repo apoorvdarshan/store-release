@@ -72,8 +72,9 @@ GATE_POLICIES = ("parallel", "after-prepare", "when-uploading")
 #   keep            leave it as it is
 #   fail            create only; an existing release fails the job
 ON_EXISTING = ("update", "upload-missing", "keep", "fail")
-# Which iOS release is marked Latest: only the highest version (the default), or every one (the others).
-LATEST_POLICIES = ("highest", "always")
+# Which iOS release is marked Latest: only the highest version (the default), every one (the ported
+# flows), or none (a repository whose Latest release is another app's, such as a Mac app's update feed).
+LATEST_POLICIES = ("highest", "always", "never")
 GATE_INPUT = re.compile(r"[A-Za-z0-9_-]+")
 SIGNING_STYLES = ("keystore-properties", "gradle-properties")
 GRADLE_PROPERTY = re.compile(r"[A-Za-z_][A-Za-z0-9_.]*")
