@@ -8,6 +8,8 @@ or `config-breaking`.
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-02
+
 Impact: checks-only
 
 ### Fixed
@@ -16,6 +18,29 @@ Impact: checks-only
   `[android.listing]` and `[android.whats_new]`: the inspection-only upload of the prepared
   listing and What's New text (`checks.yml`) failed when there was nothing to upload. The
   prepare steps before it still fail when a configured table's text is missing or invalid.
+
+### App actions required
+
+None: no config, caller, switch or secret changes. Dependabot's store-release bump moves
+the callers' pins and version comments; as a `checks-only` release it can merge once its
+Store checks pass ([how apps receive a release](docs/release-process.md#how-apps-receive-a-release)).
+
+### Verification
+
+- CI on `main` at `0102823aeab09320677b692af85ea1f743182c6d`, the code this release tags
+  (the release commit changes only this file, `__version__`, and the version in the
+  examples' and templates' rendered callers and config header):
+  [CI 41410241234](https://github.com/apoorvdarshan/store-release/actions/runs/41410241234)
+  (`test (stdlib)`, `test (strict)`, `test (macos)`, `lint`, `package`, `workflows`, and the
+  advisory `canary (fud-ai)`) and
+  [CodeQL 41410241178](https://github.com/apoorvdarshan/store-release/actions/runs/41410241178)
+  (`Analyze (python)`, `Analyze (actions)`). `release.yml` checks the required ones again on
+  the release commit.
+- `test_store_checks_pass_without_listing_or_whats_new` pins the upload setting. Coincide,
+  whose config has no listing or What's New, runs its Store checks on v0.5.1 in
+  [apoorvdarshan/coincide#214](https://github.com/apoorvdarshan/coincide/pull/214); on
+  v0.5.0 they failed only at this upload.
+- Re-run probe: not run again; `probe-rerun.yml` and `probe-inner.yml` are unchanged.
 
 ## [0.5.0] - 2026-11-02
 
