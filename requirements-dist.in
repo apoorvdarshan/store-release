@@ -2,7 +2,7 @@
 # job): the build frontend, the build backend pyproject.toml names, and twine for
 # `twine check --strict`. Install on Python 3.13 with --require-hashes.
 build==1.6.1
-hatchling==1.32.4
+hatchling==1.33.0
 twine==7.0.0
 # keyring, a twine dependency, needs these two on Linux only; they are listed so that a
 # lock compiled on macOS still installs on the Linux runners.
