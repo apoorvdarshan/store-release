@@ -35,6 +35,10 @@ class IosGateParityTests(ParityCase):
                     case = {**env, **timing}
                     kwargs = dict(event=event, ref_name=ref, marketing_version="7.2", validation_version=override)
                     upstream = outcome(lambda: self.up.ios_release.resolve_gates(case, **kwargs))
+                    if upstream[:2] == ("ReleaseError", "IOS_PUBLIC_RELEASE only applies with IOS_SUBMIT_REVIEW on"):
+                        # Intentional divergence: without submission, the release type is inert.
+                        upstream = outcome(lambda: self.up.ios_release.resolve_gates(
+                            {**case, "IOS_PUBLIC_RELEASE": "false"}, **kwargs))
                     package = outcome(lambda: ios_release.resolve_gates(case, **kwargs))
                     if upstream != package:
                         mismatches.append((case, kwargs, upstream, package))

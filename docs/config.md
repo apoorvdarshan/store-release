@@ -238,6 +238,7 @@ alpha and fitted to the first accepted size ([fixed in code](#fixed-in-code-not-
 | Key | Type | Default | Example | Meaning |
 |---|---|---|---|---|
 | `ios.creative.dir` | path | `"store/creative/ios"` | `"store/creative/ios"` | `header/` holds one 3840×1646 PNG (the product page header), `search-results/` one 3:2 PNG or JPEG 1920–3840 wide; no alpha channel |
+| `ios.creative.review_mode` | enum | `"separate"` | `"with-version"` | Standard iOS flow only. `"with-version"` adds artwork needing review to the app version's draft when both `IOS_UPLOAD_CREATIVE_ASSETS` and `IOS_SUBMIT_REVIEW` are on. Artwork-only runs still use their own draft; version-only runs leave artwork untouched. |
 | `ios.creative.sizes` | table | none | `{ "header/header.png" = 1763332 }` | *pin*; `"<slot>/<file>" = <bytes>` for each image the live Asset Library holds (`header/` a `.png`, `search-results/` a `.png`, `.jpg` or `.jpeg`; one per slot). App Store Connect matches images by name and size, so the slots must hold exactly these files at these sizes, and they must pass the image checks |
 
 ### `[ios.products]` (`IOS_SUBMIT_REVIEW`)

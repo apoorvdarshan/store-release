@@ -98,6 +98,7 @@ HEADER_SIZE = (3840, 1646)
 SEARCH_RESULTS_WIDTHS = (1920, 3840)
 CREATIVE_PLACEMENT_GROUP = "DEFAULT_PROFILE"
 DEFAULT_CREATIVE_DIR: Path = UNCONFIGURED  # ROOT / ios.creative.dir
+CREATIVE_REVIEW_MODE = "separate"
 # Asset Library image states (AppAssetLibraryAssetState). AWAITING_UPLOAD is the
 # reservation an interrupted upload leaves behind: like a failed or archived
 # image it is ignored, and the image is uploaded again.
@@ -1096,6 +1097,7 @@ def plan_creative_assets(
     locale: str,
     creative_dir: Path,
     editable: bool,
+    combined_draft: bool = False,
 ) -> CreativePlan:
     """Read-only: decide what each header / search results image needs.
 
@@ -1115,7 +1117,7 @@ def plan_creative_assets(
         image = library_image_for(images, path)
         state = attrs(image).get("state") or ""
         if image is None or state in CREATIVE_PROCESSING_STATES | CREATIVE_READY_STATES:
-            if not editable:
+            if not editable and not combined_draft:
                 fail(
                     f"cannot send the {label} image {path.name} to App Review while the version is in "
                     "a review submission; re-run once the version can be edited"
@@ -1179,7 +1181,8 @@ def place_creative_image(client: AscClient, localization_id: str, step: Creative
 
 
 def apply_creative_plan(
-    client: AscClient, plan: CreativePlan, *, app_id: str, reserved_draft: str | None = None
+    client: AscClient, plan: CreativePlan, *, app_id: str, reserved_draft: str | None = None,
+    combined_draft: str | None = None,
 ) -> dict[str, str]:
     """Upload, review and place what plan_creative_assets decided. Returns placement type -> outcome."""
     outcomes: dict[str, str] = {}
@@ -1197,7 +1200,10 @@ def apply_creative_plan(
             to_review.append((step.label, step.image))
             outcomes[step.placement_type] = "submitted for review"
     if to_review:
-        submit_creative_review(client, app_id, to_review, reserved_draft=reserved_draft)
+        if combined_draft is None:
+            submit_creative_review(client, app_id, to_review, reserved_draft=reserved_draft)
+        else:
+            add_creative_review_items(client, combined_draft, to_review)
     for step in plan.steps:
         if step.action == "place":
             place_creative_image(client, plan.localization_id, step)
@@ -1240,6 +1246,22 @@ def submit_creative_review(
         print(f"  finishing review submission {submission_id} from an earlier attempt")
     else:
         submission_id = create_draft_submission(client, app_id)
+    add_creative_review_items(client, submission_id, images)
+    items = draft_item_relationships(client, submission_id)
+    held_ids = [related_id(item, "appAssetLibraryImage") for item in items]
+    if len(items) != len(wanted) or set(held_ids) != wanted:
+        unexpected = [item.get("id") for item in items if related_id(item, "appAssetLibraryImage") not in wanted]
+        fail(
+            f"review submission {submission_id} does not hold exactly the header and search results "
+            f"images (unexpected items: {unexpected or 'none'}); not submitting it"
+        )
+    submit_product_draft(client, submission_id, what="creative image")
+    return submission_id
+
+
+def add_creative_review_items(
+    client: AscClient, submission_id: str, images: list[tuple[str, dict[str, Any]]],
+) -> None:
     held = {related_id(item, "appAssetLibraryImage") for item in draft_item_relationships(client, submission_id)}
     for label, image in images:
         if image["id"] in held:
@@ -1262,16 +1284,44 @@ def submit_creative_review(
             },
         )
         print(f"  {label}: {attrs(image).get('fileName')} added to review submission {submission_id}")
-    items = draft_item_relationships(client, submission_id)
-    held_ids = [related_id(item, "appAssetLibraryImage") for item in items]
-    if len(items) != len(wanted) or set(held_ids) != wanted:
-        unexpected = [item.get("id") for item in items if related_id(item, "appAssetLibraryImage") not in wanted]
-        fail(
-            f"review submission {submission_id} does not hold exactly the header and search results "
-            f"images (unexpected items: {unexpected or 'none'}); not submitting it"
-        )
-    submit_product_draft(client, submission_id, what="creative image")
-    return submission_id
+
+
+def combined_creative_draft(
+    client: AscClient, app_id: str, version_id: str, state: str, plan: CreativePlan,
+) -> str | None:
+    """Find the one review holding this version or its intended artwork; never take another draft."""
+    images = {step.image["id"] for step in plan.steps if step.image is not None}
+    pending = {step.image["id"] for step in plan.steps if step.action == "pending" and step.image is not None}
+    waiting = state in COMPARE_ONLY_VERSION_STATES
+    if waiting:
+        query = urllib.parse.urlencode({"filter[state]": state, "limit": "50"})
+        ids = [row["id"] for row in iter_collection(client, f"/apps/{app_id}/reviewSubmissions?{query}")]
+    else:
+        ids = draft_submission_ids(client, app_id)
+    matches = []
+    for submission_id in ids:
+        items = draft_item_relationships(client, submission_id)
+        version_ids = {related_id(item, "appStoreVersion") for item in items} - {None}
+        image_ids = {related_id(item, "appAssetLibraryImage") for item in items} - {None}
+        if version_id not in version_ids and (waiting or not image_ids & images):
+            continue
+        if version_ids - {version_id} or image_ids - images:
+            fail(f"review submission {submission_id} holds an unrelated version or creative image")
+        if not version_ids and any(not related_id(item, "appAssetLibraryImage") for item in items):
+            fail(f"review submission {submission_id} already holds unrelated review items")
+        matches.append((submission_id, version_ids, image_ids))
+    if len(matches) > 1:
+        fail("the app version and creative images are in different review drafts; reconcile them before retrying")
+    if (waiting or state == "READY_FOR_REVIEW") and (
+        not matches or version_id not in matches[0][1]
+    ):
+        fail(f"no matching review submission holds app version {version_id}")
+    held = matches[0][2] if matches else set()
+    if pending - held:
+        fail("an intended creative image is already in a different review submission")
+    if waiting and any(step.action in {"upload", "review"} for step in plan.steps):
+        fail("a creative image is not yet in review with this app version")
+    return matches[0][0] if matches else find_draft_submission(client, app_id, version_id)
 
 
 def intended_product_ids() -> set[str]:
@@ -1459,6 +1509,11 @@ def submit_product_draft(client: AscClient, submission_id: str, *, what: str = "
     submitted on its own so the product actually reaches review. Callers must
     ensure the draft holds only products intended for this release.
     """
+    send_review_submission(client, submission_id)
+    print(f"  submitted {what} review submission {submission_id}")
+
+
+def send_review_submission(client: AscClient, submission_id: str) -> None:
     client.request(
         "PATCH",
         f"/reviewSubmissions/{submission_id}",
@@ -1470,7 +1525,6 @@ def submit_product_draft(client: AscClient, submission_id: str, *, what: str = "
             }
         },
     )
-    print(f"  submitted {what} review submission {submission_id}")
 
 
 def current_subscription_version(
@@ -1673,6 +1727,14 @@ def submit_for_review(
     if submission_id is None:
         submission_id = get_or_create_draft_submission(client, app_id)
 
+    add_version_review_item(client, submission_id, version_id, version_state)
+    send_review_submission(client, submission_id)
+    print(f"  submitted App Store version {version_id} for review (submission {submission_id})")
+
+
+def add_version_review_item(
+    client: AscClient, submission_id: str, version_id: str, version_state: str,
+) -> None:
     items_versions = draft_item_version_ids(client, submission_id)
     # READY_FOR_REVIEW means the version is already held by this draft submission.
     already_added = version_state == "READY_FOR_REVIEW" or version_id in items_versions
@@ -1693,23 +1755,6 @@ def submit_for_review(
                 }
             },
         )
-
-    # Submitting is a PATCH with submitted=true; there is no /submit action.
-    client.request(
-        "PATCH",
-        f"/reviewSubmissions/{submission_id}",
-        body={
-            "data": {
-                "type": "reviewSubmissions",
-                "id": submission_id,
-                "attributes": {"submitted": True},
-            }
-        },
-    )
-    print(
-        f"  submitted App Store version {version_id} for review "
-        f"(submission {submission_id})"
-    )
 
 
 RELEASE_TYPE_PUBLIC = "AFTER_APPROVAL"
@@ -2268,6 +2313,7 @@ def store_step(client: AscClient, *, args: argparse.Namespace, flags: Mapping[st
     do_creative = flags["creative"]
     do_submit = flags["submit"]
     do_public = flags["public_release"]
+    combine_creative = do_creative and do_submit and CREATIVE_REVIEW_MODE == "with-version"
 
     if not args.version:
         fail("--version is required for live ASC calls (pass marketing version from tag)")
@@ -2305,11 +2351,9 @@ def store_step(client: AscClient, *, args: argparse.Namespace, flags: Mapping[st
         fail(
             f"version {args.version!r} cannot be submitted for review (state={state})"
         )
-    # Pick and check the version's draft before any write. It is reserved for
-    # the version and its products, so header and search results images never
-    # go out in it.
+    # Pick and check the version's draft before any write.
     reserved_draft: str | None = None
-    if do_submit and not waiting:
+    if do_submit and not waiting and not combine_creative:
         reserved_draft = reserve_version_draft(client, app_id, version_id, state)
 
     # Read-only comparisons first, so a mismatch stops the run before any write.
@@ -2323,7 +2367,10 @@ def store_step(client: AscClient, *, args: argparse.Namespace, flags: Mapping[st
             locale=args.locale,
             creative_dir=args.creative_dir,
             editable=not screenshots_locked,
+            combined_draft=combine_creative and not waiting,
         )
+        if combine_creative:
+            reserved_draft = combined_creative_draft(client, app_id, version_id, state, creative_plan)
     if do_screenshots and screenshots_locked:
         print(f"checking ASC screenshots (locked while the version is {state})…")
         upload_screenshots(
@@ -2367,7 +2414,7 @@ def store_step(client: AscClient, *, args: argparse.Namespace, flags: Mapping[st
             screenshots_dir=args.screenshots_dir,
         )
 
-    if creative_plan is not None:
+    if creative_plan is not None and not combine_creative:
         print("syncing ASC product page header and search results images…")
         apply_creative_plan(client, creative_plan, app_id=app_id, reserved_draft=reserved_draft)
 
@@ -2402,10 +2449,20 @@ def store_step(client: AscClient, *, args: argparse.Namespace, flags: Mapping[st
 
     if do_submit:
         print("selecting this run's build…")
-        select_build(client, version_id, args.build_id, args.version, args.build_number)
-        set_release_type(client, version_id, public_release=do_public)
+        if combine_creative and state == "READY_FOR_REVIEW":
+            verify_build(client, args.build_id, args.version, args.build_number)
+            confirm_selected_build(client, version_id, args.build_id)
+            expected_release = RELEASE_TYPE_PUBLIC if do_public else RELEASE_TYPE_MANUAL
+            if attrs(version).get("releaseType") != expected_release:
+                fail("the draft's release type differs from this run; correct it in App Store Connect first")
+        else:
+            select_build(client, version_id, args.build_id, args.version, args.build_number)
+            set_release_type(client, version_id, public_release=do_public)
         print("attaching in-app purchases / subscriptions to the review submission…")
         submission_id = reserved_draft or create_draft_submission(client, app_id)
+        if combine_creative:
+            assert creative_plan is not None
+            apply_creative_plan(client, creative_plan, app_id=app_id, combined_draft=submission_id)
         try:
             # IAP submissions reach App Review immediately, so they wait for the
             # recheck below; subscriptions only join the unsubmitted draft here.
@@ -2417,6 +2474,17 @@ def store_step(client: AscClient, *, args: argparse.Namespace, flags: Mapping[st
             # required product blocks the whole submission rather than letting
             # the version enter review without it.
             fail(f"{exc} Not submitting the app version.")
+        if combine_creative:
+            add_version_review_item(client, submission_id, version_id, state)
+            items = draft_item_relationships(client, submission_id)
+            if {related_id(item, "appStoreVersion") for item in items} - {None} != {version_id}:
+                fail("the review draft does not hold exactly the intended app version")
+            allowed_images = {step.image["id"] for step in creative_plan.steps if step.image is not None}
+            expected_images = {step.image["id"] for step in creative_plan.steps
+                               if step.image is not None and step.action in {"upload", "review", "pending"}}
+            held_images = {related_id(item, "appAssetLibraryImage") for item in items} - {None}
+            if not expected_images <= held_images <= allowed_images:
+                fail("the review draft is missing intended creative images or holds unrelated images")
         # Recheck immediately before anything goes to App Review: the selection
         # must still be this run's processed build.
         verify_build(client, args.build_id, args.version, args.build_number)
@@ -2426,9 +2494,10 @@ def store_step(client: AscClient, *, args: argparse.Namespace, flags: Mapping[st
         except ProductSubmitError as exc:
             fail(f"{exc} Not submitting the app version.")
         print("submitting for App Store review…")
-        submit_for_review(
-            client, app_id, version_id, state, submission_id=submission_id
-        )
+        if combine_creative:
+            submit_product_draft(client, submission_id, what=f"App Store version {version_id} with creative images")
+        else:
+            submit_for_review(client, app_id, version_id, state, submission_id=submission_id)
         print(f"  {result.submitted} product(s) went out with the version")
 
     print("ASC release step finished")

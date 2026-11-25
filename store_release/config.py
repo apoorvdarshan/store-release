@@ -206,6 +206,7 @@ class Ios:
     # (workflow secret, repository secret) for each secret the callers pass from a repository
     # secret of another name; every other secret is passed from its own name.
     secrets: tuple[tuple[str, str], ...] = ()
+    creative_review_mode: str = "separate"
 
     @property
     def pbxproj(self) -> str:
@@ -761,8 +762,12 @@ def _ios(table: _Table, slug: str) -> Ios:
     creative_table = table.table("creative")
     creative_dir = None
     creative_sizes = None
+    creative_review_mode = "separate"
     if creative_table is not None:
         creative_dir = creative_table.path("dir", "store/creative/ios")
+        creative_review_mode = creative_table.enum("review_mode", ("separate", "with-version"), "separate")
+        if ported and creative_review_mode != "separate":
+            raise ConfigError(f"{creative_table.key('review_mode')}: with-version requires the standard iOS flow")
         if creative_table.has("sizes"):
             creative_sizes = _creative_sizes(creative_table)
         creative_table.done()
@@ -790,7 +795,7 @@ def _ios(table: _Table, slug: str) -> Ios:
     return Ios(tag_prefix, bundle_id, asc_app_id, team_id, project, scheme, app_target, info_plist,
                locale, gate_jobs, build, listing, whats_new, screenshots, creative_dir, iap_route, title,
                export_compliance, creative_sizes, flow, gate_policy, prepare_checks, prepare_checkout,
-               screenshot_manifest, on_existing, latest, source_archive, secrets)
+               screenshot_manifest, on_existing, latest, source_archive, secrets, creative_review_mode)
 
 
 def _android(table: _Table, slug: str) -> Android:

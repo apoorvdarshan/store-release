@@ -317,9 +317,8 @@ def resolve_gates(
                     "IOS_SUBMIT_REVIEW needs IOS_UPLOAD_BUILD: review submission only uses "
                     "the build uploaded by this run, never an older build"
                 )
-            if requested["public_release"] and not requested["submit"]:
-                raise ReleaseError("IOS_PUBLIC_RELEASE only applies with IOS_SUBMIT_REVIEW on")
             resolved = dict(requested)
+            resolved["public_release"] = requested["public_release"] and requested["submit"]
         else:
             ignored = [name for name, key in OPERATION_SWITCHES if requested[key]]
             if ignored:
@@ -635,19 +634,23 @@ def version_preflight(
         asc.localization_for_locale(
             client, f"/appStoreVersions/{record['id']}/appStoreVersionLocalizations", locale
         )
-    if submit and state == "READY_FOR_REVIEW":
+    combine_creative = creative and submit and asc.CREATIVE_REVIEW_MODE == "with-version"
+    if submit and state == "READY_FOR_REVIEW" and not combine_creative:
         # The store step submits the draft holding this version; finding out
         # after the build and upload that there is none would be too late.
         asc.version_draft(client, app_id, record["id"], state)
     if creative:
-        asc.plan_creative_assets(
+        plan = asc.plan_creative_assets(
             client,
             app_id=app_id,
             version_id=record["id"],
             locale=locale,
             creative_dir=creative_dir or asc.DEFAULT_CREATIVE_DIR,
             editable=state in asc.EDITABLE_VERSION_STATES,
+            combined_draft=combine_creative,
         )
+        if combine_creative:
+            asc.combined_creative_draft(client, app_id, record["id"], state, plan)
     return state
 
 
