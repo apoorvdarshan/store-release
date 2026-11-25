@@ -110,7 +110,7 @@ class GateTests(unittest.TestCase):
         with self.assertRaisesRegex(ReleaseError, "IOS_UPLOAD_BUILD"):
             gates(env)
 
-    def test_public_release_is_inert_without_submit(self) -> None:
+    def test_public_release_requires_submit(self) -> None:
         env = {"IOS_RELEASE_AUTOMATION": "true", "IOS_UPLOAD_BUILD": "true", "IOS_PUBLIC_RELEASE": "true"}
         result = gates(env)
         self.assertTrue(result["upload_build"])
@@ -1484,7 +1484,7 @@ class CreativeAssetTests(unittest.TestCase):
     def test_combined_mode_still_supports_artwork_only_and_version_only(self) -> None:
         with mock.patch.object(asc_release, "CREATIVE_REVIEW_MODE", "with-version"):
             artwork = CreativeFake()
-            self.assertEqual(self.run_main(artwork, {**self.ENV, "PUBLIC_RELEASE": "true"}), 0)
+            self.assertEqual(self.run_main(artwork), 0)
             self.assertEqual(len(artwork.submitted), 1)
             self.assertEqual(len(artwork.items[artwork.submitted[0]]), 2)
             self.assertFalse(any(related(i, "appStoreVersion") for i in artwork.items[artwork.submitted[0]]))

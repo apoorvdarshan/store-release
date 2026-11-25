@@ -1509,6 +1509,11 @@ def submit_product_draft(client: AscClient, submission_id: str, *, what: str = "
     submitted on its own so the product actually reaches review. Callers must
     ensure the draft holds only products intended for this release.
     """
+    send_review_submission(client, submission_id)
+    print(f"  submitted {what} review submission {submission_id}")
+
+
+def send_review_submission(client: AscClient, submission_id: str) -> None:
     client.request(
         "PATCH",
         f"/reviewSubmissions/{submission_id}",
@@ -1520,7 +1525,6 @@ def submit_product_draft(client: AscClient, submission_id: str, *, what: str = "
             }
         },
     )
-    print(f"  submitted {what} review submission {submission_id}")
 
 
 def current_subscription_version(
@@ -1724,7 +1728,8 @@ def submit_for_review(
         submission_id = get_or_create_draft_submission(client, app_id)
 
     add_version_review_item(client, submission_id, version_id, version_state)
-    submit_product_draft(client, submission_id, what=f"App Store version {version_id}")
+    send_review_submission(client, submission_id)
+    print(f"  submitted App Store version {version_id} for review (submission {submission_id})")
 
 
 def add_version_review_item(
@@ -1750,6 +1755,7 @@ def add_version_review_item(
                 }
             },
         )
+
 
 RELEASE_TYPE_PUBLIC = "AFTER_APPROVAL"
 RELEASE_TYPE_MANUAL = "MANUAL"
@@ -2249,6 +2255,8 @@ def main() -> None:
             "UPLOAD_CREATIVE_ASSETS / SUBMIT_IOS_REVIEW are off"
         )
         return
+    if do_public and not do_submit:
+        fail("PUBLIC_RELEASE only applies when SUBMIT_IOS_REVIEW is on")
     if do_submit and not (args.build_id and args.build_number):
         fail(
             "submitting needs --build-id and --build-number for the build uploaded by "
