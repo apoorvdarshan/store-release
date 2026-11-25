@@ -8,6 +8,8 @@ or `config-breaking`.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-26
+
 Impact: release-path
 
 ### Added
@@ -20,11 +22,21 @@ Impact: release-path
 
 - Standard iOS upload-only and artwork-only runs can leave `IOS_PUBLIC_RELEASE` enabled.
   It only changes the App Store version's release type when the version is submitted.
+- Updated the runtime lock to pyasn1 0.6.5.
 
 ### App actions required
 
 None for existing behavior. For combined review, set `review_mode = "with-version"` under
 `[ios.creative]` and enable the artwork and app-review switches for the release.
+
+### Verification
+
+- [CI and Fud AI canary](https://github.com/apoorvdarshan/store-release/actions/runs/45717756750),
+  [CodeQL](https://github.com/apoorvdarshan/store-release/actions/runs/45717756653),
+  and [fuzz checks](https://github.com/apoorvdarshan/store-release/actions/runs/45717756670)
+  passed on the reviewed implementation in PR #40.
+- The local full suite passed 586 tests. App Review and publication were not exercised
+  by these tests.
 
 ## [0.5.1] - 2026-11-02
 
