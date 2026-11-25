@@ -110,10 +110,12 @@ class GateTests(unittest.TestCase):
         with self.assertRaisesRegex(ReleaseError, "IOS_UPLOAD_BUILD"):
             gates(env)
 
-    def test_public_release_requires_submit(self) -> None:
+    def test_public_release_is_inert_without_submit(self) -> None:
         env = {"IOS_RELEASE_AUTOMATION": "true", "IOS_UPLOAD_BUILD": "true", "IOS_PUBLIC_RELEASE": "true"}
-        with self.assertRaisesRegex(ReleaseError, "IOS_SUBMIT_REVIEW"):
-            gates(env)
+        result = gates(env)
+        self.assertTrue(result["upload_build"])
+        self.assertFalse(result["public_release"])
+        self.assertFalse(result["submit"])
 
     def test_tag_must_match_marketing_version(self) -> None:
         with self.assertRaisesRegex(ReleaseError, "does not match"):
@@ -1451,6 +1453,53 @@ class CreativeAssetTests(unittest.TestCase):
 
     def image_review_drafts(self, fake: CreativeFake) -> set[str]:
         return {draft for draft, items in fake.items.items() if any(related(i, "appAssetLibraryImage") for i in items)}
+
+    def test_combined_review_submits_exactly_one_draft_for_build_and_images(self) -> None:
+        fake = CreativeFake()
+        with mock.patch.object(asc_release, "CREATIVE_REVIEW_MODE", "with-version"):
+            self.assertEqual(self.submit(fake), 0)
+        self.assertEqual(len(fake.submitted), 1)
+        items = fake.items[fake.submitted[0]]
+        self.assertEqual(len(items), 3)
+        self.assertEqual([related(i, "appStoreVersion") for i in items if related(i, "appStoreVersion")], ["V1"])
+        self.assertEqual({related(i, "appAssetLibraryImage") for i in items if related(i, "appAssetLibraryImage")},
+                         {image["id"] for image in fake.library})
+        seen = len(writes(fake))
+        fake.state = "WAITING_FOR_REVIEW"
+        with mock.patch.object(asc_release, "CREATIVE_REVIEW_MODE", "with-version"):
+            self.assertEqual(self.submit(fake), 0)
+        self.assertEqual(len(writes(fake)), seen)
+
+    def test_combined_review_resumes_draft_after_attaching_one_image(self) -> None:
+        fake = CreativeFake(
+            library=[self.image("H", self.header, "READY_FOR_REVIEW")],
+            drafts=["PART"], draft_items={"PART": [image_item("H")]},
+        )
+        with mock.patch.object(asc_release, "CREATIVE_REVIEW_MODE", "with-version"):
+            self.assertEqual(self.submit(fake), 0)
+        self.assertEqual(fake.submitted, ["PART"])
+        self.assertNotIn(("POST", "/reviewSubmissions"), fake.calls)
+        self.assertEqual(len(fake.items["PART"]), 3)
+
+    def test_combined_mode_still_supports_artwork_only_and_version_only(self) -> None:
+        with mock.patch.object(asc_release, "CREATIVE_REVIEW_MODE", "with-version"):
+            artwork = CreativeFake()
+            self.assertEqual(self.run_main(artwork, {**self.ENV, "PUBLIC_RELEASE": "true"}), 0)
+            self.assertEqual(len(artwork.submitted), 1)
+            self.assertEqual(len(artwork.items[artwork.submitted[0]]), 2)
+            self.assertFalse(any(related(i, "appStoreVersion") for i in artwork.items[artwork.submitted[0]]))
+            version = CreativeFake()
+            self.assertEqual(self.run_main(version, {"SUBMIT_IOS_REVIEW": "true", "PUBLIC_RELEASE": "true"},
+                                           "--build-id", "B9", "--build-number", "40"), 0)
+            self.assertEqual(len(version.submitted), 1)
+            self.assertEqual([related(i, "appStoreVersion") for i in version.items[version.submitted[0]]], ["V1"])
+            self.assertEqual(version.library, [])
+
+    def test_combined_review_refuses_images_already_in_another_review(self) -> None:
+        fake = CreativeFake(library=[self.image("H", self.header, "IN_REVIEW")])
+        with mock.patch.object(asc_release, "CREATIVE_REVIEW_MODE", "with-version"):
+            self.assertEqual(self.submit(fake), 1)
+        self.assertEqual(writes(fake), [])
 
     def test_new_images_are_uploaded_once_and_reviewed_on_their_own(self) -> None:
         fake = CreativeFake()

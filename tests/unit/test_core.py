@@ -150,6 +150,12 @@ class ConfigLoadTests(unittest.TestCase):
 
 
 class ConfigValueTests(unittest.TestCase):
+    def test_ios_creative_review_mode_is_opt_in(self) -> None:
+        data = fud_ai_data()
+        self.assertEqual(config.parse(data).ios.creative_review_mode, "separate")
+        data["ios"]["creative"]["review_mode"] = "with-version"
+        self.assertEqual(config.parse(data).ios.creative_review_mode, "with-version")
+
     BAD = [
         ("schema", "1", "schema"),
         ("app.name", "", "app.name"),
@@ -203,6 +209,7 @@ class ConfigValueTests(unittest.TestCase):
         ("ios.screenshots.sets[3].required", True, "WATCH set must have required = false"),
         ("ios.screenshots.sets[1].display_type", "APP_IPHONE_67", "listed twice"),
         ("ios.creative.dir", "", "ios.creative.dir"),
+        ("ios.creative.review_mode", "combined", "ios.creative.review_mode"),
         ("ios.export_compliance", "no", "ios.export_compliance"),
         ("ios.export_compliance", False, "ios.export_compliance"),
         ("ios.creative.sizes", {}, "ios.creative.sizes"),

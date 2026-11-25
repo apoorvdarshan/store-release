@@ -39,9 +39,9 @@ switch the code reads.
 | `IOS_UPLOAD_LISTING` | off | Description, keywords, promotional text, marketing and support URLs from `[ios.listing]`, checked before the build. Off: never read |
 | `IOS_UPLOAD_WHATS_NEW` | off | What's New text from `[ios.whats_new]`, checked before the build. Off: never read |
 | `IOS_UPLOAD_SCREENSHOTS` | off | The configured `[[ios.screenshots.sets]]`, staged as RGB without alpha. A set is replaced only when its files differ |
-| `IOS_UPLOAD_CREATIVE_ASSETS` | off | Product page header and search results images from `[ios.creative]`, checked (size, format, no alpha) before the build. A new image is uploaded to the Asset Library once and sent to App Review in a submission of its own (never the version's); an approved image is placed on the version's page while the version can be edited. Off: never read |
+| `IOS_UPLOAD_CREATIVE_ASSETS` | off | Product page header and search results images from `[ios.creative]`, checked (size, format, no alpha) before the build. A new image is uploaded to the Asset Library once and reviewed separately by default. Set `ios.creative.review_mode = "with-version"` to attach artwork needing review to the same draft when `IOS_SUBMIT_REVIEW` is also on. Approved images are placed while the version is editable. Off: never read |
 | `IOS_SUBMIT_REVIEW` | off | Select this run's build and submit the version and the catalog's Ready-to-Submit in-app purchases and subscriptions for review. Requires `IOS_UPLOAD_BUILD` and `[ios.products]` |
-| `IOS_PUBLIC_RELEASE` | off | Release automatically after approval (`AFTER_APPROVAL`). Off: you release it by hand (`MANUAL`). Requires `IOS_SUBMIT_REVIEW` |
+| `IOS_PUBLIC_RELEASE` | off | Release automatically after approval (`AFTER_APPROVAL`). Off: you release it by hand (`MANUAL`). The standard flow ignores this setting when `IOS_SUBMIT_REVIEW` is off, so upload-only or artwork-only runs leave the release type unchanged. |
 | `IOS_BUILD_POLL_SECONDS` | 30 | Build readiness poll interval in seconds (10–600) |
 | `IOS_BUILD_WAIT_MINUTES` | 120 | Total build wait from upload start, in minutes (10–300) |
 

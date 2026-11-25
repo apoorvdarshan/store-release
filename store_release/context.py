@@ -93,6 +93,7 @@ def configure(config: Config, app_root: Path, *, config_path: str = "store/store
         asc.ASC_APP_ID = ios.asc_app_id
         asc.SCREENSHOT_SETS = tuple(asc.SCREENSHOT_SET_TABLE[s.display_type] for s in sets)
         asc.DEFAULT_CREATIVE_DIR = root / (ios.creative_dir or "store/creative/ios")
+        asc.CREATIVE_REVIEW_MODE = ios.creative_review_mode
         asc.LOCALE = ios.locale
 
         screenshots.ASC_SETS = tuple(

@@ -8,6 +8,24 @@ or `config-breaking`.
 
 ## [Unreleased]
 
+Impact: release-path
+
+### Added
+
+- Standard iOS releases can opt into `ios.creative.review_mode = "with-version"` to send
+  the app version and artwork that needs review in one submission. The default remains
+  separate review. Artwork-only and version-only runs remain independent.
+
+### Fixed
+
+- Standard iOS upload-only and artwork-only runs can leave `IOS_PUBLIC_RELEASE` enabled.
+  It only changes the App Store version's release type when the version is submitted.
+
+### App actions required
+
+None for existing behavior. For combined review, set `review_mode = "with-version"` under
+`[ios.creative]` and enable the artwork and app-review switches for the release.
+
 ## [0.5.1] - 2026-11-02
 
 Impact: checks-only

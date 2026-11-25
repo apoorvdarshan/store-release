@@ -371,8 +371,10 @@ class CreativeFake(FakeAsc):
                              for pid, p in self.placements.items() if p["loc"] == "LOC1" and p["type"] == wanted]}
         if path.startswith(f"/apps/{APP}/reviewSubmissions"):
             self.calls.append(("GET", path))
-            assert query.get("filter[state]") == ["READY_FOR_REVIEW"], path
-            return {"data": [{"type": "reviewSubmissions", "id": draft} for draft in self.drafts]}
+            state = query.get("filter[state]")
+            assert state in (["READY_FOR_REVIEW"], ["WAITING_FOR_REVIEW"]), path
+            ids = self.drafts if state == ["READY_FOR_REVIEW"] else self.submitted
+            return {"data": [{"type": "reviewSubmissions", "id": draft} for draft in ids]}
         if parsed.path.startswith("/reviewSubmissions/") and parsed.path.endswith("/items"):
             self.calls.append(("GET", path))
             assert "appAssetLibraryImage" in (query.get("include") or [""])[0], path
